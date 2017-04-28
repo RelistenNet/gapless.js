@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title></title>
+</head>
+<body>
+  <script type="text/javascript" src="/index.js"></script>
+  <script type="text/javascript">
+    const gap = new GaplessQueue({
+      // tracks: [
+      //   "http://phish.in/audio/000/012/321/12321.mp3",
+      //   "http://phish.in/audio/000/012/322/12322.mp3",
+      //   "http://phish.in/audio/000/012/323/12323.mp3",
+      //   "http://phish.in/audio/000/012/324/12324.mp3"
+      // ]
+      tracks: [
+        "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t03.mp3",
+        "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t04.mp3",
+        "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t05.mp3",
+        "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t06.mp3"
+      ]
+    });
+
+    gap.play();
+  </script>
+</body>
+</html>
