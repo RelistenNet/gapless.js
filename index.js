@@ -1,5 +1,7 @@
 const PRELOAD_NUM_TRACKS = 2;
 
+const audioContext = new AudioContext();
+
 const GaplessPlaybackType = {
   HTML5: 'HTML5',
   WEBAUDIO: 'WEBAUDIO'
@@ -13,23 +15,28 @@ const GaplessPlaybackLoadingState = {
 
 class GaplessQueue {
   constructor(props = {}) {
-    const { tracks = [] } = props;
+    const { tracks = [], onProgress } = props;
 
-    this.props = props;
+    this.props = { onProgress };
     this.state = { volume: 1, currentTrackIdx: 0 };
 
     this.tracks = tracks.map((trackUrl, idx) =>
       new GaplessTrack({
         trackUrl,
         idx,
-        preload: idx === 0,
         queue: this
       })
     );
   }
 
-  addTrack(track) {
-    this.tracks.push(track);
+  addTrack(trackUrl) {
+    this.tracks.push(
+      new GaplessTrack({
+        trackUrl,
+        idx: this.tracks.length,
+        queue: this
+      })
+    );
   }
 
   removeTrack(track) {
@@ -41,13 +48,29 @@ class GaplessQueue {
     if (this.currentTrack) this.currentTrack.play();
   }
 
+  pause() {
+    if (this.currentTrack) this.currentTrack.pause();
+  }
+
   playNext() {
     this.state.currentTrackIdx++;
 
     this.play();
   }
 
+  pauseAll() {
+    Object.values(this.tracks).map(track => {
+      track.pause();
+    });
+  }
+
+  gotoTrack(idx) {
+    this.pauseAll();
+    this.state.currentTrackIdx = idx;
+  }
+
   loadTrack(idx, loadHTML5) {
+    console.log(idx, loadHTML5, this)
     // only preload if song is within the next 2
     if (this.state.currentTrackIdx + PRELOAD_NUM_TRACKS <= idx) return;
     const track = this.tracks[idx];
@@ -87,10 +110,11 @@ may not be possible. try skipping to end of file and missing middle of audio buf
 
 */
 class GaplessTrack {
-  constructor({ trackUrl, preload, queue, idx }) {
+  constructor({ trackUrl, queue, idx }) {
     // playback type state
     this.playbackType = GaplessPlaybackType.HTML5;
     this.bufferLoadingState = GaplessPlaybackLoadingState.NONE;
+    this.loadedHEAD = false;
 
     // basic inputs from GaplessQueue
     this.idx = idx;
@@ -106,12 +130,12 @@ class GaplessTrack {
     this.audio.onended = this.onEnded;
     this.audio.controls = false;
     this.audio.volume = queue.state.volume;
-    this.audio.preload = preload ? 'auto' : 'none';
+    this.audio.preload = 'none';
     this.audio.src = trackUrl;
     // this.audio.onprogress = () => this.debug(this.idx, this.audio.buffered)
 
     // WebAudio
-    this.audioContext = new AudioContext();
+    this.audioContext = audioContext;
     this.gainNode = this.audioContext.createGain();
     this.gainNode.connect(this.audioContext.destination);
     this.gainNode.gain.value = queue.state.volume;
@@ -122,14 +146,12 @@ class GaplessTrack {
 
     this.bufferSourceNode = this.audioContext.createBufferSource();
     this.bufferSourceNode.onended = this.onEnded;
-
-    this.loadHead(() => {
-      preload && this.loadBuffer();
-    });
   }
 
   // private functions
   loadHead(cb) {
+    if (this.loadedHEAD) return cb();
+
     const options = {
       method: 'HEAD'
     };
@@ -140,7 +162,9 @@ class GaplessTrack {
           this.trackUrl = res.url;
         }
 
-        cb(res);
+        this.loadedHEAD = true;
+
+        cb();
       })
     }
 
@@ -181,8 +205,7 @@ class GaplessTrack {
     // happen in the middle of a paused track
     this.bufferSourceNode.playbackRate.value = this.currentTime !== 0 && this.isPaused ? 0 : 1;
 
-    this.webAudioStartedPlayingAt = this.audioContext.currentTime;
-    this.webAudioCurrentTime = this.currentTime;
+    this.webAudioStartedPlayingAt = this.audioContext.currentTime - this.currentTime;
 
     // slight blip, could be improved
     this.bufferSourceNode.start(0, this.currentTime);
@@ -208,7 +231,11 @@ class GaplessTrack {
       // if we've already set up the buffer just set playbackRate to 1
       if (this.isUsingWebAudio) {
         this.bufferSourceNode.playbackRate.value = 1;
-        this.webAudioPausedDuration += this.audioContext.currentTime - this.webAudioPausedAt;
+
+        if (this.webAudioPausedAt) {
+          this.webAudioPausedDuration += this.audioContext.currentTime - this.webAudioPausedAt;
+        }
+
         this.webAudioPausedAt = 0;
       }
       // otherwise set the bufferSourceNode buffer and switch to WebAudio
@@ -221,6 +248,7 @@ class GaplessTrack {
     }
     else {
       this.audio.play();
+      this.loadHead(() => this.loadBuffer());
     }
 
     this.onProgress();
@@ -291,8 +319,8 @@ class GaplessTrack {
     this.queue.onProgress(this);
 
     // this.debug(this.currentTime, this.duration);
-    // window.requestAnimationFrame(this.onProgress);
-    setTimeout(this.onProgress, 1000);
+    window.requestAnimationFrame(this.onProgress);
+    // setTimeout(this.onProgress, 33.33); // 30fps
   }
 
 
@@ -340,6 +368,16 @@ class GaplessTrack {
     return {
       playbackType: this.playbackType,
       bufferLoadingState: this.bufferLoadingState
+    };
+  }
+
+  get completeState() {
+    return {
+      playbackType: this.playbackType,
+      bufferLoadingState: this.bufferLoadingState,
+      isPaused: this.isPaused,
+      currentTime: this.currentTime,
+      duration: this.duration
     };
   }
 
