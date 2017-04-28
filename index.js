@@ -113,7 +113,7 @@ class GaplessTrack {
   constructor({ trackUrl, queue, idx }) {
     // playback type state
     this.playbackType = GaplessPlaybackType.HTML5;
-    this.bufferLoadingState = GaplessPlaybackLoadingState.NONE;
+    this.webAudioLoadingState = GaplessPlaybackLoadingState.NONE;
     this.loadedHEAD = false;
 
     // basic inputs from GaplessQueue
@@ -169,9 +169,9 @@ class GaplessTrack {
     }
 
   loadBuffer(cb) {
-    if (this.bufferLoadingState !== GaplessPlaybackLoadingState.NONE) return;
+    if (this.webAudioLoadingState !== GaplessPlaybackLoadingState.NONE) return;
 
-    this.bufferLoadingState = GaplessPlaybackLoadingState.LOADING;
+    this.webAudioLoadingState = GaplessPlaybackLoadingState.LOADING;
     const options = {
       // headers: new Headers({
       //     Range: "bytes=-" + 1024 * 1024
@@ -183,7 +183,7 @@ class GaplessTrack {
       .then(res =>
         this.audioContext.decodeAudioData(res, buffer => {
           this.debug('finished downloading track');
-          this.bufferLoadingState = GaplessPlaybackLoadingState.LOADED;
+          this.webAudioLoadingState = GaplessPlaybackLoadingState.LOADED;
           this.bufferSourceNode.buffer = this.audioBuffer = buffer;
           this.bufferSourceNode.connect(this.gainNode);
           this.queue.loadTrack(this.idx + 1);
@@ -198,7 +198,7 @@ class GaplessTrack {
     // if we've switched tracks, don't switch to web audio
     if (!this.isActiveTrack) return;
 
-    this.debug('switch to web audio', this.currentTime, this.isPaused);
+    this.debug('switch to web audio', this.currentTime, this.isPaused, this.audio.duration - this.audioBuffer.duration);
 
     // if currentTime === 0, this is a new track, so play it
     // otherwise we're hitting this mid-track which may
@@ -247,6 +247,7 @@ class GaplessTrack {
       this.queue.loadTrack(this.idx + 1);
     }
     else {
+      this.audio.preload = 'auto';
       this.audio.play();
       this.loadHead(() => this.loadBuffer());
     }
@@ -367,14 +368,14 @@ class GaplessTrack {
   get state() {
     return {
       playbackType: this.playbackType,
-      bufferLoadingState: this.bufferLoadingState
+      webAudioLoadingState: this.webAudioLoadingState
     };
   }
 
   get completeState() {
     return {
       playbackType: this.playbackType,
-      bufferLoadingState: this.bufferLoadingState,
+      webAudioLoadingState: this.webAudioLoadingState,
       isPaused: this.isPaused,
       currentTime: this.currentTime,
       duration: this.duration
