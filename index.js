@@ -15,9 +15,9 @@ const GaplessPlaybackLoadingState = {
 
 class GaplessQueue {
   constructor(props = {}) {
-    const { tracks = [], onProgress } = props;
+    const { tracks = [], onProgress, onEnded, onPlayNextTrack } = props;
 
-    this.props = { onProgress };
+    this.props = { onProgress, onEnded };
     this.state = { volume: 1, currentTrackIdx: 0 };
 
     this.tracks = tracks.map((trackUrl, idx) =>
@@ -44,6 +44,10 @@ class GaplessQueue {
     return this.tracks.splice(index, 1);
   }
 
+  togglePlayPause() {
+    if (this.currentTrack) this.currentTrack.togglePlayPause();
+  }
+
   play() {
     if (this.currentTrack) this.currentTrack.play();
   }
@@ -52,10 +56,31 @@ class GaplessQueue {
     if (this.currentTrack) this.currentTrack.pause();
   }
 
+  playPrevious() {
+    this.resetCurrentTrack();
+
+    if (--this.state.currentTrackIdx < 0) this.state.currentTrackIdx = 0;
+
+    this.play();
+
+    if (this.props.onPlayNextTrack) this.props.onPlayNextTrack(this.currentTrack);
+  }
+
   playNext() {
+    this.resetCurrentTrack();
+
     this.state.currentTrackIdx++;
 
     this.play();
+
+    if (this.props.onPlayNextTrack) this.props.onPlayNextTrack(this.currentTrack);
+  }
+
+  resetCurrentTrack() {
+    if (this.currentTrack) {
+      this.currentTrack.seek(0)
+      this.currentTrack.pause();
+    }
   }
 
   pauseAll() {
@@ -78,6 +103,10 @@ class GaplessQueue {
     if (track) track.preload(loadHTML5);
   }
 
+  onEnded() {
+    if (this.props.onEnded) this.props.onEnded();
+  }
+
   onProgress(track) {
     if (this.props.onProgress) this.props.onProgress(track);
   }
@@ -86,12 +115,8 @@ class GaplessQueue {
     return this.tracks[this.state.currentTrackIdx];
   }
 
-  get isNextTracksBufferLoaded() {
-    const nextTrack = this.tracks[this.state.currentTrackIdx + 1];
-
-    if (!nextTrack) return false;
-
-    return nextTrack.isLoaded;
+  get nextTrack() {
+    return this.tracks[this.state.currentTrackIdx + 1];
   }
 }
 
@@ -218,6 +243,8 @@ class GaplessTrack {
   pause() {
     if (this.isUsingWebAudio) {
       this.webAudioPausedAt = this.audioContext.currentTime;
+      // TODO: actually destroy and re-open bufferSourceNode on pause/play
+      // because Chrome thinks audio is playing (tab icon) even if playbackRate is 0
       this.bufferSourceNode.playbackRate.value = 0;
     }
     else {
@@ -304,20 +331,26 @@ class GaplessTrack {
   onEnded() {
     this.debug('onEnded');
     this.queue.playNext();
+    this.queue.onEnded();
   }
 
   onProgress() {
-    if (this.isPaused || !this.isActiveTrack) return;
+    if (!this.isActiveTrack) return;
 
     const isWithinLastTenSeconds = (this.duration - this.currentTime) <= 10;
+    const nextTrack = this.queue.nextTrack;
 
     // if in last 10 seconds and next track hasn't loaded yet
     // start loading next track's HTML5
-    if (isWithinLastTenSeconds && !this.queue.isNextTracksBufferLoaded) {
+    if (isWithinLastTenSeconds && nextTrack && !nextTrack.isLoaded) {
       this.queue.loadTrack(this.idx + 1, true);
     }
 
     this.queue.onProgress(this);
+
+    // if we're paused, we still want to send one final onProgress call
+    // and then bow out, hence this being at the end of the function
+    if (this.isPaused) return;
 
     // this.debug(this.currentTime, this.duration);
     window.requestAnimationFrame(this.onProgress);
@@ -362,7 +395,7 @@ class GaplessTrack {
   }
 
   get isLoaded() {
-    return !!this.audioBuffer;
+    return this.webAudioLoadingState === GaplessPlaybackLoadingState.LOADED;
   }
 
   get state() {
@@ -378,7 +411,8 @@ class GaplessTrack {
       webAudioLoadingState: this.webAudioLoadingState,
       isPaused: this.isPaused,
       currentTime: this.currentTime,
-      duration: this.duration
+      duration: this.duration,
+      idx: this.idx
     };
   }
 
