@@ -30,9 +30,24 @@
 
   class Queue {
     constructor(props = {}) {
-      const { tracks = [], onProgress, onEnded, onPlayNextTrack, onPlayPreviousTrack, onStartNewTrack } = props;
+      const {
+        tracks = [],
+        onProgress,
+        onEnded,
+        onPlayNextTrack,
+        onPlayPreviousTrack,
+        onStartNewTrack,
+        disableWebAudio = false
+      } = props;
 
-      this.props = { onProgress, onEnded, onPlayNextTrack, onPlayPreviousTrack, onStartNewTrack };
+      this.props = {
+        onProgress,
+        onEnded,
+        onPlayNextTrack,
+        onPlayPreviousTrack,
+        onStartNewTrack,
+        disableWebAudio
+      };
       this.state = { volume: 1, currentTrackIdx: 0 };
 
       this.Track = Track;
@@ -82,7 +97,7 @@
 
       this.play();
 
-      if (this.props.onPlayNextTrack) this.props.onPlayNextTrack(this.currentTrack);
+      if (this.props.onStartNewTrack) this.props.onStartNewTrack(this.currentTrack);
       if (this.props.onPlayPreviousTrack) this.props.onPlayPreviousTrack(this.currentTrack);
     }
 
@@ -178,6 +193,8 @@
       this.audio.src = trackUrl;
       // this.audio.onprogress = () => this.debug(this.idx, this.audio.buffered)
 
+      if (queue.props.disableWebAudio) return;
+
       // WebAudio
       this.audioContext = audioContext;
       this.gainNode = this.audioContext.createGain();
@@ -192,7 +209,7 @@
     }
 
     // private functions
-    loadHead(cb) {
+    loadHEAD(cb) {
       if (this.loadedHEAD) return cb();
 
       const options = {
@@ -215,22 +232,24 @@
       if (this.webAudioLoadingState !== GaplessPlaybackLoadingState.NONE) return;
 
       this.webAudioLoadingState = GaplessPlaybackLoadingState.LOADING;
-      const options = {
-        // headers: new Headers({
-        //     Range: "bytes=-" + 1024 * 1024
-        // })
-      };
 
-      fetch(this.trackUrl, options)
+      fetch(this.trackUrl)
         .then(res => res.arrayBuffer())
         .then(res =>
           this.audioContext.decodeAudioData(res, buffer => {
             this.debug('finished downloading track');
+
             this.webAudioLoadingState = GaplessPlaybackLoadingState.LOADED;
+
             this.bufferSourceNode.buffer = this.audioBuffer = buffer;
             this.bufferSourceNode.connect(this.gainNode);
+
+            // try to preload next track
             this.queue.loadTrack(this.idx + 1);
+
+            // if we loaded the active track, switch to web audio
             if (this.isActiveTrack) this.switchToWebAudio();
+
             cb && cb(buffer);
           })
         )
@@ -304,7 +323,7 @@
       else {
         this.audio.preload = 'auto';
         this.audio.play();
-        this.loadHead(() => this.loadBuffer());
+        if (!this.queue.props.disableWebAudio) this.loadHEAD(() => this.loadBuffer());
       }
 
       this.onProgress();
@@ -319,8 +338,8 @@
       if (HTML5 && this.audio.preload !== 'auto') {
         this.audio.preload = 'auto';
       }
-      else if (!this.audioBuffer) {
-        this.loadBuffer();
+      else if (!this.audioBuffer && !this.queue.props.disableWebAudio) {
+        this.loadHEAD(() => this.loadBuffer());
       }
     }
 
@@ -375,12 +394,12 @@
     onProgress() {
       if (!this.isActiveTrack) return;
 
-      const isWithinLastTenSeconds = (this.duration - this.currentTime) <= 10;
+      const isWithinLastTwentyFiveSeconds = (this.duration - this.currentTime) <= 25;
       const nextTrack = this.queue.nextTrack;
 
-      // if in last 10 seconds and next track hasn't loaded yet
+      // if in last 25 seconds and next track hasn't loaded yet
       // start loading next track's HTML5
-      if (isWithinLastTenSeconds && nextTrack && !nextTrack.isLoaded) {
+      if (isWithinLastTwentyFiveSeconds && nextTrack && !nextTrack.isLoaded) {
         this.queue.loadTrack(this.idx + 1, true);
       }
 
