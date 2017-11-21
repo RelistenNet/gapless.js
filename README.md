@@ -10,7 +10,7 @@ You can see a sample of the library in use currently at <Relisten.live> which is
 
 ## Sample usage
 
-```
+```javascript
     const player = new Gapless.Queue({
       tracks: [
         "http://phish.in/audio/000/012/321/12321.mp3",
