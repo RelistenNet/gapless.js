@@ -28,7 +28,7 @@ You can see a sample of the library in use currently at <Relisten.live> which is
 
 ## API (subject to change)
 
-```
+```javascript
 // functions
 player.togglePlayPause();   // toggle play/pause
 player.playNext();          // play next track
