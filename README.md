@@ -26,6 +26,22 @@ You can see a sample of the library in use currently at <Relisten.live> which is
     player.play();
 ```
 
+## API (subject to change)
+
+```
+// functions
+player.togglePlayPause();   // toggle play/pause
+player.playNext();          // play next track
+player.playPrevious();      // play previous track
+player.resetCurrentTrack(); // reset current track to 0
+player.gotoTrack(idx, playImmediately); // jump to track by index and pass true to play immediately
+player.disableWebAudio();   // disable gapless playback/web audio
+
+// getters
+player.currentTrack;        // returns current active track
+player.nextTrack;           // returns next track
+```
+
 ## License
 
 MIT - do as you please
