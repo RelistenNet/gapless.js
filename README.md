@@ -26,6 +26,17 @@ You can see a sample of the library in use currently at <Relisten.live> which is
     player.play();
 ```
 
+## Gapless.Queue Options
+```javascript
+        tracks = [],
+        onProgress,
+        onEnded,
+        onPlayNextTrack,
+        onPlayPreviousTrack,
+        onStartNewTrack,
+        webAudioIsDisabled = false
+```
+
 ## API (subject to change)
 
 ```javascript
