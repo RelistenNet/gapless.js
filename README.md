@@ -4,7 +4,7 @@ gapless.js is a library for gapless audio playback. It is not intended to be a f
 
 In short, it takes an array of audio tracks and utilizes HTML5 audio and the web audio API to enable gapless playback of individual tracks.
 
-I will expand this README with more details in time.
+I will expand this README with more details in time. If you're interested in this library, don't hesitate to leave me a note with any questions.
 
 You can see a sample of the library in use currently at <Relisten.live> which is the not-yet-released beta of the next version of <Relisten.net>
 

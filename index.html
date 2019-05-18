@@ -6,6 +6,10 @@
     html, body {
       width: 600px;
     }
+    
+    .loaded {
+      color: green;
+    }
   </style>
 </head>
 <body>
@@ -15,6 +19,7 @@
 
   <div onClick="player.currentTrack.seekToEnd()">Click to jump to end of track</div>
   <div onClick="player.currentTrack.togglePlayPause()">Toggle Play/Pause</div>
+  <pre id="ready">Both tracks are not loaded</pre>
   <pre id="status"></pre>
   <script type="text/javascript" src="./index.js"></script>
   <script type="text/javascript">
@@ -32,7 +37,14 @@
         "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t06.mp3"
       ],
       onProgress: function(track) {
-        document.querySelector('#status').innerHTML = JSON.stringify(track ? track.completeState : {}, null, 2);
+        if (player.nextTrack && player.nextTrack.webAudioLoadingState === 'LOADED') {
+          document.querySelector('#ready').classList.add('loaded');
+          document.querySelector('#ready').innerHTML = 'Both tracks are LOADED';
+        }
+        document.querySelector('#status').innerHTML = JSON.stringify({
+          currentTrack: track ? track.completeState : {},
+          nextTrack: player.nextTrack ? player.nextTrack.completeState : {}
+        }, null, 2);
       }
     });
 
