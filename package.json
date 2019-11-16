@@ -1,15 +1,46 @@
 {
   "name": "gapless.js",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Gapless audio playback javascript plugin",
   "main": "index.js",
+  "types": "index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "clean": "rimraf index.d.ts index.js",
+    "build": "tsc",
+    "lint": "eslint '**/*.{js,ts,tsx}' --fix",
+    "prepublish": "npm run lint && npm run build"
+  },
+  "lint-staged": {
+    "*.js": [
+      "eslint --fix"
+    ],
+    "*.ts": [
+      "eslint --fix"
+    ]
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "lint-staged"
+    }
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RelistenNet/gapless.js.git"
+    "url": "git+https://github.com/jgeurts/gapless.js.git"
   },
-  "author": "Daniel Saewitz",
-  "license": "MIT"
+  "author": "Daniel Saewitz, Jim Geurts",
+  "license": "MIT",
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "2.7.0",
+    "@typescript-eslint/parser": "2.7.0",
+    "eslint": "6.6.0",
+    "eslint-config-airbnb-base": "14.0.0",
+    "eslint-plugin-import": "2.18.2",
+    "eslint-plugin-jsdoc": "17.1.1",
+    "eslint-plugin-promise": "4.2.1",
+    "eslint-plugin-security": "1.4.0",
+    "husky": "3.0.9",
+    "lint-staged": "9.4.2",
+    "rimraf": "^3.0.0",
+    "typescript": "3.7.2"
+  }
 }
