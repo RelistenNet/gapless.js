@@ -1,4 +1,7 @@
 ### 2.2.0
+  * Use `globalThis` instead of `window` to access `AudioContext`
+
+### 2.2.0
   * Remove `tracks` from Queue constructor
   * Expose Queue.tracks as public
   * Transpile as commonjs module

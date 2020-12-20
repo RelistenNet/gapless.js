@@ -35,13 +35,11 @@ interface QueueProps<TTrack> {
   onStartNewTrack?: (track: Track<TTrack>) => void;
 }
 
-declare global {
-  interface Window {
-    webkitAudioContext: AudioContext;
-  }
+interface WithWebkitAudioContext {
+  webkitAudioContext: AudioContext;
 }
 
-const AudioContext = window.AudioContext || window.webkitAudioContext;
+const AudioContext = globalThis.AudioContext || ((globalThis as unknown) as WithWebkitAudioContext).webkitAudioContext;
 
 export class Queue<TTrackMetadata> {
   private props: QueueProps<TTrackMetadata>;
