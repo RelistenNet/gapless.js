@@ -1,3 +1,8 @@
+### 2.2.0
+  * Remove `tracks` from Queue constructor
+  * Expose Queue.tracks as public
+  * Transpile as commonjs module
+
 ### 2.1.0
   Update dependencies and code style
 

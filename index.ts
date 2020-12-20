@@ -10,7 +10,6 @@ enum PlaybackLoadingState {
 }
 
 export interface QueueOptions {
-  tracks?: string[];
   onProgress?: () => void;
   onEnded?: () => void;
   onPlayNextTrack?: () => void;
@@ -36,11 +35,11 @@ interface QueueProps<TTrack> {
   onStartNewTrack?: (track: Track<TTrack>) => void;
 }
 
-interface WindowWithWebkitAudioContext extends Window {
-  webkitAudioContext: AudioContext;
+declare global {
+  interface Window {
+    webkitAudioContext: AudioContext;
+  }
 }
-
-declare let window: WindowWithWebkitAudioContext & typeof globalThis;
 
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 
@@ -49,20 +48,11 @@ export class Queue<TTrackMetadata> {
 
   private numberOfTracksToPreload: number;
 
-  private tracks: Track<TTrackMetadata>[];
+  public readonly tracks: Track<TTrackMetadata>[] = [];
 
   public state: QueueState;
 
-  public constructor({
-    tracks = [], //
-    onProgress,
-    onEnded,
-    onPlayNextTrack,
-    onPlayPreviousTrack,
-    onStartNewTrack,
-    webAudioIsDisabled = false,
-    numberOfTracksToPreload = 2,
-  }: QueueOptions = {}) {
+  public constructor({ onProgress, onEnded, onPlayNextTrack, onPlayPreviousTrack, onStartNewTrack, webAudioIsDisabled = false, numberOfTracksToPreload = 2 }: QueueOptions = {}) {
     this.props = {
       onProgress,
       onEnded,
@@ -78,17 +68,6 @@ export class Queue<TTrackMetadata> {
       currentTrackIndex: 0,
       webAudioIsDisabled,
     };
-
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
-    this.tracks = tracks.map(
-      (trackUrl, index) =>
-        new Track({
-          trackUrl,
-          index,
-          queue: this,
-          metadata: {} as TTrackMetadata,
-        }),
-    );
   }
 
   public addTrack({ trackUrl, metadata = {} as TTrackMetadata }: { trackUrl: string; metadata: TTrackMetadata }): void {
