@@ -110,14 +110,16 @@ export class Queue<TTrackMetadata> {
 
     this.resetCurrentTrack();
 
-    await this.play();
+    if (this.currentTrack) {
+      await this.play();
 
-    if (this.props.onStartNewTrack) {
-      this.props.onStartNewTrack(this.currentTrack);
-    }
+      if (this.props.onStartNewTrack) {
+        this.props.onStartNewTrack(this.currentTrack);
+      }
 
-    if (this.props.onPlayPreviousTrack) {
-      this.props.onPlayPreviousTrack(this.currentTrack);
+      if (this.props.onPlayPreviousTrack) {
+        this.props.onPlayPreviousTrack(this.currentTrack);
+      }
     }
   }
 
@@ -128,14 +130,16 @@ export class Queue<TTrackMetadata> {
 
     this.resetCurrentTrack();
 
-    await this.play();
+    if (this.currentTrack) {
+      await this.play();
 
-    if (this.props.onStartNewTrack) {
-      this.props.onStartNewTrack(this.currentTrack);
-    }
+      if (this.props.onStartNewTrack) {
+        this.props.onStartNewTrack(this.currentTrack);
+      }
 
-    if (this.props.onPlayNextTrack) {
-      this.props.onPlayNextTrack(this.currentTrack);
+      if (this.props.onPlayNextTrack) {
+        this.props.onPlayNextTrack(this.currentTrack);
+      }
     }
   }
 
@@ -158,7 +162,7 @@ export class Queue<TTrackMetadata> {
 
     this.resetCurrentTrack();
 
-    if (playImmediately) {
+    if (playImmediately && this.currentTrack) {
       await this.play();
 
       if (this.props.onStartNewTrack) {
@@ -189,13 +193,17 @@ export class Queue<TTrackMetadata> {
 
   // Internal - Used by the track to notify when progress has updated
   public notifyTrackProgressUpdated(): void {
-    if (this.props.onProgress) {
+    if (this.props.onProgress && this.currentTrack) {
       this.props.onProgress(this.currentTrack);
     }
   }
 
-  public get currentTrack(): Track<TTrackMetadata> {
-    return this.tracks[this.state.currentTrackIndex];
+  public get currentTrack(): Track<TTrackMetadata> | undefined {
+    if (this.state.currentTrackIndex < this.tracks.length) {
+      return this.tracks[this.state.currentTrackIndex];
+    }
+
+    return undefined;
   }
 
   public get nextTrack(): Track<TTrackMetadata> {
@@ -452,7 +460,7 @@ export class Track<TTrackMetadata> {
   }
 
   public get isActiveTrack(): boolean {
-    return this.queue.currentTrack.index === this.index;
+    return this.queue.currentTrack?.index === this.index;
   }
 
   public get isLoaded(): boolean {

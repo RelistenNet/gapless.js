@@ -1,4 +1,7 @@
-### 2.2.0
+### 2.2.2
+  * Allow currentTrack to be undefined
+
+### 2.2.1
   * Use `globalThis` instead of `window` to access `AudioContext`
 
 ### 2.2.0
