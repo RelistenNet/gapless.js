@@ -1,3 +1,6 @@
+### 2.2.3
+  * Add option to specify `mode` for `fetch()` operations
+
 ### 2.2.2
   * Allow currentTrack to be undefined
 

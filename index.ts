@@ -16,6 +16,7 @@ export interface QueueOptions {
   onPlayPreviousTrack?: () => void;
   onStartNewTrack?: () => void;
   webAudioIsDisabled?: boolean;
+  fetchMode?: 'cors' | 'no-cors' | 'same-origin';
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   debug?: ((message: string, ...optionalParams: any[]) => void) | null;
   numberOfTracksToPreload?: number;
@@ -50,7 +51,9 @@ export class Queue<TTrackMetadata> {
 
   public state: QueueState;
 
-  public constructor({ onProgress, onEnded, onPlayNextTrack, onPlayPreviousTrack, onStartNewTrack, webAudioIsDisabled = false, numberOfTracksToPreload = 2 }: QueueOptions = {}) {
+  public readonly fetchMode?: 'cors' | 'no-cors' | 'same-origin';
+
+  public constructor({ onProgress, onEnded, onPlayNextTrack, onPlayPreviousTrack, onStartNewTrack, webAudioIsDisabled = false, numberOfTracksToPreload = 2, fetchMode = 'cors' }: QueueOptions = {}) {
     this.props = {
       onProgress,
       onEnded,
@@ -58,6 +61,7 @@ export class Queue<TTrackMetadata> {
       onPlayPreviousTrack,
       onStartNewTrack,
     };
+    this.fetchMode = fetchMode;
 
     this.numberOfTracksToPreload = numberOfTracksToPreload;
 
@@ -492,6 +496,7 @@ export class Track<TTrackMetadata> {
 
     const { redirected, url } = await fetch(this.trackUrl, {
       method: 'HEAD',
+      mode: this.queue.fetchMode,
     });
 
     if (redirected) {
@@ -509,7 +514,9 @@ export class Track<TTrackMetadata> {
 
       this.webAudioLoadingState = PlaybackLoadingState.loading;
 
-      const response = await fetch(this.trackUrl);
+      const response = await fetch(this.trackUrl, {
+        mode: this.queue.fetchMode,
+      });
       const buffer = await response.arrayBuffer();
       this.audioBuffer = await this.audioContext.decodeAudioData(buffer);
 

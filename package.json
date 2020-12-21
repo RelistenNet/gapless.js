@@ -1,6 +1,6 @@
 {
   "name": "gapless.js",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "Gapless audio playback javascript plugin",
   "main": "index.js",
   "types": "index.d.ts",
