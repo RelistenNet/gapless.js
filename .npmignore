@@ -1,8 +1,11 @@
 .git
 .gitignore
 .editorconfig
+.eslintrc.js
 .npmrc
+.prettierrc.js
 .github
+.husky
 
 node_modules
 npm-debug.log
@@ -29,3 +32,5 @@ dump.rdb
 
 Dockerfile
 Makefile
+
+index.ts
