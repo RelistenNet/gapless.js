@@ -1,31 +1,35 @@
-(function(factory) {
+(function (factory) {
   // Establish the root object, `window` (`self`) in the browser, or `global` on the server.
   // We use `self` instead of `window` for `WebWorker` support.
-  var root = (typeof self == 'object' && self.self === self && self) ||
-            (typeof global == 'object' && global.global === global && global);
+  const root =
+    (typeof self == 'object' && self.self === self && self) ||
+    (typeof global == 'object' && global.global === global && global);
 
   // Node.js, CommonJS, or ES6
-  if (typeof module === "object" && typeof module.exports === "object") {
+  if (typeof module === 'object' && typeof module.exports === 'object') {
     module.exports = factory(root, exports);
-  // Finally, as a browser global.
+    // Finally, as a browser global.
   } else {
     root.Gapless = factory(root, {});
   }
-})(function(root, Gapless) {
+})((root, Gapless) => {
   const PRELOAD_NUM_TRACKS = 2;
 
   const isBrowser = typeof window !== 'undefined';
-  const audioContext = isBrowser ? new (window.AudioContext || window.webkitAudioContext)() : null;
+  const audioContext =
+    isBrowser && (window.AudioContext || window.webkitAudioContext)
+      ? new (window.AudioContext || window.webkitAudioContext)()
+      : null;
 
   const GaplessPlaybackType = {
     HTML5: 'HTML5',
-    WEBAUDIO: 'WEBAUDIO'
+    WEBAUDIO: 'WEBAUDIO',
   };
 
   const GaplessPlaybackLoadingState = {
     NONE: 'NONE',
     LOADING: 'LOADING',
-    LOADED: 'LOADED'
+    LOADED: 'LOADED',
   };
 
   class Queue {
@@ -37,7 +41,7 @@
         onPlayNextTrack,
         onPlayPreviousTrack,
         onStartNewTrack,
-        webAudioIsDisabled = false
+        webAudioIsDisabled = false,
       } = props;
 
       this.props = {
@@ -45,33 +49,41 @@
         onEnded,
         onPlayNextTrack,
         onPlayPreviousTrack,
-        onStartNewTrack
+        onStartNewTrack,
       };
 
       this.state = {
         volume: 1,
         currentTrackIdx: 0,
-        webAudioIsDisabled
+        webAudioIsDisabled,
       };
 
       this.Track = Track;
 
-      this.tracks = tracks.map((trackUrl, idx) =>
-        new Track({
-          trackUrl,
-          idx,
-          queue: this
-        })
+      this.tracks = tracks.map(
+        (trackUrl, idx) =>
+          new Track({
+            trackUrl,
+            idx,
+            queue: this,
+          })
       );
+
+      // if the browser doesn't support web audio
+      // disable it!
+      if (!audioContext) {
+        this.disableWebAudio();
+      }
     }
 
-    addTrack({ trackUrl, metadata = {} }) {
+    addTrack({ trackUrl, skipHEAD, metadata = {} }) {
       this.tracks.push(
         new Track({
           trackUrl,
+          skipHEAD,
           metadata,
           idx: this.tracks.length,
-          queue: this
+          queue: this,
         })
       );
     }
@@ -121,13 +133,13 @@
 
     resetCurrentTrack() {
       if (this.currentTrack) {
-        this.currentTrack.seek(0)
+        this.currentTrack.seek(0);
         this.currentTrack.pause();
       }
     }
 
     pauseAll() {
-      Object.values(this.tracks).map(track => {
+      Object.values(this.tracks).map((track) => {
         track.pause();
       });
     }
@@ -182,12 +194,12 @@
 
       this.state.volume = nextVolume;
 
-      this.tracks.map(track => track.setVolume(nextVolume));
+      this.tracks.map((track) => track.setVolume(nextVolume));
     }
   }
 
   class Track {
-    constructor({ trackUrl, queue, idx, metadata }) {
+    constructor({ trackUrl, skipHEAD, queue, idx, metadata }) {
       // playback type state
       this.playbackType = GaplessPlaybackType.HTML5;
       this.webAudioLoadingState = GaplessPlaybackLoadingState.NONE;
@@ -197,6 +209,7 @@
       this.idx = idx;
       this.queue = queue;
       this.trackUrl = trackUrl;
+      this.skipHEAD = skipHEAD;
       this.metadata = metadata;
 
       this.onEnded = this.onEnded.bind(this);
@@ -205,7 +218,7 @@
       // HTML5 Audio
       this.audio = new Audio();
       this.audio.onerror = this.audioOnError;
-      this.audio.onended = this.onEnded;
+      this.audio.onended = () => this.onEnded('HTML5');
       this.audio.controls = false;
       this.audio.volume = queue.state.volume;
       this.audio.preload = 'none';
@@ -216,14 +229,14 @@
 
       // WebAudio
       this.audioContext = audioContext;
-      this.gainNode = this.audioContext.createGain();
+      this.gainNode = this.audioContext ? this.audioContext.createGain() : null;
       this.gainNode.gain.value = queue.state.volume;
       this.webAudioStartedPlayingAt = 0;
       this.webAudioPausedDuration = 0;
       this.webAudioPausedAt = 0;
       this.audioBuffer = null;
 
-      this.bufferSourceNode = this.audioContext.createBufferSource();
+      this.bufferSourceNode = this.audioContext ? this.audioContext.createBufferSource() : null;
       this.bufferSourceNode.onended = this.onEnded;
     }
 
@@ -232,19 +245,18 @@
       if (this.loadedHEAD) return cb();
 
       const options = {
-        method: 'HEAD'
+        method: 'HEAD',
       };
 
-      fetch(this.trackUrl, options)
-        .then(res => {
-          if (res.redirected) {
-            this.trackUrl = res.url;
-          }
+      fetch(this.trackUrl, options).then((res) => {
+        if (res.redirected) {
+          this.trackUrl = res.url;
+        }
 
-          this.loadedHEAD = true;
+        this.loadedHEAD = true;
 
-          cb();
-        })
+        cb();
+      });
     }
 
     loadBuffer(cb) {
@@ -253,38 +265,64 @@
       this.webAudioLoadingState = GaplessPlaybackLoadingState.LOADING;
 
       fetch(this.trackUrl)
-        .then(res => res.arrayBuffer())
-        .then(res =>
-          this.audioContext.decodeAudioData(res, buffer => {
-            this.debug('finished downloading track');
+        .then((res) => res.arrayBuffer())
+        .then((res) =>
+          this.audioContext.decodeAudioData(
+            res,
+            (buffer) => {
+              this.debug('finished downloading track');
 
-            this.webAudioLoadingState = GaplessPlaybackLoadingState.LOADED;
+              this.webAudioLoadingState = GaplessPlaybackLoadingState.LOADED;
 
-            this.bufferSourceNode.buffer = this.audioBuffer = buffer;
-            this.bufferSourceNode.connect(this.gainNode);
+              this.bufferSourceNode.buffer = this.audioBuffer = buffer;
+              this.bufferSourceNode.connect(this.gainNode);
 
-            // try to preload next track
-            this.queue.loadTrack(this.idx + 1);
+              // try to preload next track
+              this.queue.loadTrack(this.idx + 1);
 
-            // if we loaded the active track, switch to web audio
-            if (this.isActiveTrack) this.switchToWebAudio();
+              // if we loaded the active track, switch to web audio
+              if (this.isActiveTrack) this.switchToWebAudio();
+              // if its not.. then just turn on web audio
+              else this.playbackType = GaplessPlaybackType.WEBAUDIO;
 
-            cb && cb(buffer);
-          })
+              cb && cb(buffer);
+            },
+            (err) => {
+              console.error('error decoding audio data', err);
+            }
+          )
         )
-        .catch(e => this.debug('caught fetch error', e));
+        .catch((e) => this.debug('caught fetch error', e));
     }
 
-    switchToWebAudio() {
+    switchToWebAudio(forcePause) {
       // if we've switched tracks, don't switch to web audio
-      if (!this.isActiveTrack) return;
+      if (!this.isActiveTrack && !forcePause) return;
 
-      this.debug('switch to web audio', this.currentTime, this.isPaused, this.audio.duration - this.audioBuffer.duration);
+      this.debug(
+        'switch to web audio',
+        this.currentTime,
+        this.isPaused,
+        this.audio.duration,
+        this.audioBuffer.duration,
+        this.audio.duration - this.audioBuffer.duration
+      );
+
+      if (this.currentTime !== 0 && isNaN(this.audio.duration)) {
+        this.debug('For some reason this.audio.duration === NaN. Weird.', this.audio);
+
+        return;
+      }
 
       // if currentTime === 0, this is a new track, so play it
       // otherwise we're hitting this mid-track which may
       // happen in the middle of a paused track
-      this.bufferSourceNode.playbackRate.value = this.currentTime !== 0 && this.isPaused ? 0 : 1;
+      if (forcePause) {
+        this.bufferSourceNode.playbackRate.value = 0;
+        this.pause();
+      } else {
+        this.bufferSourceNode.playbackRate.value = this.currentTime !== 0 && this.isPaused ? 0 : 1;
+      }
 
       this.connectGainNode();
 
@@ -292,6 +330,14 @@
 
       // slight blip, could be improved
       this.bufferSourceNode.start(0, this.currentTime);
+
+      if (this.isPaused) {
+        this.webAudioPausedAt = this.audioContext.currentTime;
+        this.bufferSourceNode.playbackRate.value = 0;
+        this.gainNode.disconnect(this.audioContext.destination);
+        this.bufferSourceNode.onended = null;
+      }
+
       this.audio.pause();
 
       this.playbackType = GaplessPlaybackType.WEBAUDIO;
@@ -299,13 +345,18 @@
 
     // public-ish functions
     pause() {
+      this.debug('pause');
       if (this.isUsingWebAudio) {
         if (this.bufferSourceNode.playbackRate.value === 0) return;
         this.webAudioPausedAt = this.audioContext.currentTime;
         this.bufferSourceNode.playbackRate.value = 0;
-        this.gainNode.disconnect(this.audioContext.destination);
-      }
-      else {
+        try {
+          this.gainNode.disconnect(this.audioContext.destination);
+        } catch (err) {
+          console.error(err);
+        }
+        this.bufferSourceNode.onended = null;
+      } else {
         this.audio.pause();
       }
     }
@@ -324,10 +375,15 @@
           // use seek to avoid bug where track wouldn't play properly
           // if paused for longer than length of track
           // TODO: fix bug -- must be related to bufferSourceNode
-          this.seek(this.currentTime);
+          if (this.currentTime !== 0) {
+            this.seek(this.currentTime);
+          }
           // was paused, now force play
           this.connectGainNode();
           this.bufferSourceNode.playbackRate.value = 1;
+          if (!this.bufferSourceNode.onended) {
+            this.bufferSourceNode.onended = () => this.onEnded('webaudio3');
+          }
 
           this.webAudioPausedAt = 0;
         }
@@ -338,11 +394,16 @@
 
         // Try to preload the next track
         this.queue.loadTrack(this.idx + 1);
-      }
-      else {
+      } else {
         this.audio.preload = 'auto';
         this.audio.play();
-        if (!this.queue.state.webAudioIsDisabled) this.loadHEAD(() => this.loadBuffer());
+        if (!this.queue.state.webAudioIsDisabled) {
+          if (this.skipHEAD) {
+            this.loadBuffer();
+          } else {
+            this.loadHEAD(() => this.loadBuffer());
+          }
+        }
       }
 
       this.onProgress();
@@ -353,21 +414,26 @@
     }
 
     preload(HTML5) {
-      this.debug('preload', HTML5);
       if (HTML5 && this.audio.preload !== 'auto') {
+        this.debug('preload', HTML5);
         this.audio.preload = 'auto';
-      }
-      else if (!this.audioBuffer && !this.queue.state.webAudioIsDisabled) {
-        this.loadHEAD(() => this.loadBuffer());
+      } else if (!this.audioBuffer && !this.queue.state.webAudioIsDisabled) {
+        this.debug('preload', HTML5);
+
+        if (this.skipHEAD) {
+          this.loadBuffer();
+        } else {
+          this.loadHEAD(() => this.loadBuffer());
+        }
       }
     }
 
     // TODO: add checks for to > duration or null or negative (duration - to)
     seek(to = 0) {
+      this.debug('seek', to);
       if (this.isUsingWebAudio) {
         this.seekBufferSourceNode(to);
-      }
-      else {
+      } else {
         this.audio.currentTime = to;
       }
 
@@ -377,13 +443,17 @@
     seekBufferSourceNode(to) {
       const wasPaused = this.isPaused;
       this.bufferSourceNode.onended = null;
-      this.bufferSourceNode.stop();
+      try {
+        this.bufferSourceNode.stop();
+      } catch (e) {
+        console.error(e);
+      }
 
       this.bufferSourceNode = this.audioContext.createBufferSource();
 
       this.bufferSourceNode.buffer = this.audioBuffer;
       this.bufferSourceNode.connect(this.gainNode);
-      this.bufferSourceNode.onended = this.onEnded;
+      this.bufferSourceNode.onended = () => this.onEnded('webaudio2');
 
       this.webAudioStartedPlayingAt = this.audioContext.currentTime - to;
       this.webAudioPausedDuration = 0;
@@ -404,8 +474,14 @@
       this.debug('audioOnError', e);
     }
 
-    onEnded() {
-      this.debug('onEnded');
+    onEnded(from) {
+      this.debug('onEnded', from, this.isActiveTrack, this);
+
+      // debug: try clearing the onended callback
+      if (this.bufferSourceNode && this.bufferSourceNode.onended) {
+        this.bufferSourceNode.onended = null;
+      }
+
       this.queue.playNext();
       this.queue.onEnded();
     }
@@ -413,7 +489,7 @@
     onProgress() {
       if (!this.isActiveTrack) return;
 
-      const isWithinLastTwentyFiveSeconds = (this.duration - this.currentTime) <= 25;
+      const isWithinLastTwentyFiveSeconds = this.duration - this.currentTime <= 25;
       const nextTrack = this.queue.nextTrack;
 
       // if in last 25 seconds and next track hasn't loaded yet
@@ -435,7 +511,7 @@
 
     setVolume(nextVolume) {
       this.audio.volume = nextVolume;
-      this.gainNode.gain.value = nextVolume;
+      if (this.gainNode) this.gainNode.gain.value = nextVolume;
     }
 
     // getter helpers
@@ -446,17 +522,19 @@
     get isPaused() {
       if (this.isUsingWebAudio) {
         return this.bufferSourceNode.playbackRate.value === 0;
-      }
-      else {
+      } else {
         return this.audio.paused;
       }
     }
 
     get currentTime() {
       if (this.isUsingWebAudio) {
-        return this.audioContext.currentTime - this.webAudioStartedPlayingAt - this.webAudioPausedDuration;
-      }
-      else {
+        return (
+          this.audioContext.currentTime -
+          this.webAudioStartedPlayingAt -
+          this.webAudioPausedDuration
+        );
+      } else {
         return this.audio.currentTime;
       }
     }
@@ -464,8 +542,7 @@
     get duration() {
       if (this.isUsingWebAudio) {
         return this.audioBuffer.duration;
-      }
-      else {
+      } else {
         return this.audio.duration;
       }
     }
@@ -481,7 +558,7 @@
     get state() {
       return {
         playbackType: this.playbackType,
-        webAudioLoadingState: this.webAudioLoadingState
+        webAudioLoadingState: this.webAudioLoadingState,
       };
     }
 
@@ -492,25 +569,23 @@
         isPaused: this.isPaused,
         currentTime: this.currentTime,
         duration: this.duration,
-        idx: this.idx
+        idx: this.idx,
       };
     }
 
     // debug helper
     debug(first, ...args) {
-      console.log(`${this.idx}:${first}`, ...args, this.state);
+      console.log(new Date(), `${this.idx}:${first}`, ...args, this.state, this);
     }
 
     // just a helper to quick jump to the end of a track for testing
     seekToEnd() {
       if (this.isUsingWebAudio) {
         this.seekBufferSourceNode(this.audioBuffer.duration - 6);
-      }
-      else {
+      } else {
         this.audio.currentTime = this.audio.duration - 6;
       }
     }
-
   }
 
   Gapless.Queue = Queue;
