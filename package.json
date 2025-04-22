@@ -1,6 +1,6 @@
 {
   "name": "gapless.js",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Gapless audio playback javascript plugin",
   "main": "dist/cjs/index.cjs",
   "module": "dist/index.mjs",
