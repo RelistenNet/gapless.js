@@ -11,19 +11,21 @@ You can see a sample of the library in use currently at <Relisten.live> which is
 ## Sample usage
 
 ```javascript
-    const player = new Gapless.Queue({
-      tracks: [
-        "http://phish.in/audio/000/012/321/12321.mp3",
-        "http://phish.in/audio/000/012/322/12322.mp3",
-        "http://phish.in/audio/000/012/323/12323.mp3",
-        "http://phish.in/audio/000/012/324/12324.mp3"
-      ],
-      onProgress: function(track) {
-        track && console.log(track.completeState);
-      }
-    });
-    
-    player.play();
+  import GaplessQueue from 'gapless.js';
+
+  const player = new GaplessQueue({
+    tracks: [
+      "http://phish.in/audio/000/012/321/12321.mp3",
+      "http://phish.in/audio/000/012/322/12322.mp3",
+      "http://phish.in/audio/000/012/323/12323.mp3",
+      "http://phish.in/audio/000/012/324/12324.mp3"
+    ],
+    onProgress: function(track) {
+      track && console.log(track.completeState);
+    }
+  });
+
+  player.play();
 ```
 
 ## Gapless.Queue Options

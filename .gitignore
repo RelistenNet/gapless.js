@@ -18,3 +18,5 @@ nbproject
 .eslintcache
 
 package-lock.json
+
+dist/

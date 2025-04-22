@@ -1,20 +1,25 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <title></title>
   <style type="text/css">
-    html, body {
+    html,
+    body {
       width: 600px;
     }
-    
+
     .loaded {
       color: green;
     }
   </style>
 </head>
+
 <body>
   <h4>
-    You'll want to wait until WebAudio is loaded for both the current track and the next track before jumping to the end. Otherwise you may notice a slight gap. If both WebAudios are fully loaded you should hear no discernable gap most of the time.
+    You'll want to wait until WebAudio is loaded for both the current track and the next track before jumping to the
+    end. Otherwise you may notice a slight gap. If both WebAudios are fully loaded you should hear no discernable gap
+    most of the time.
   </h4>
 
   <div onClick="player.currentTrack.seekToEnd()">Click to jump to end of track</div>
@@ -24,19 +29,13 @@
   <script type="text/javascript" src="./index.js"></script>
   <script type="text/javascript">
     window.player = new Gapless.Queue({
-      // tracks: [
-      //   "http://phish.in/audio/000/012/321/12321.mp3",
-      //   "http://phish.in/audio/000/012/322/12322.mp3",
-      //   "http://phish.in/audio/000/012/323/12323.mp3",
-      //   "http://phish.in/audio/000/012/324/12324.mp3"
-      // ]
       tracks: [
         "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t03.mp3",
         "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t04.mp3",
         "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t05.mp3",
         "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t06.mp3"
       ],
-      onProgress: function(track) {
+      onProgress: function (track) {
         if (player.nextTrack && player.nextTrack.webAudioLoadingState === 'LOADED') {
           document.querySelector('#ready').classList.add('loaded');
           document.querySelector('#ready').innerHTML = 'Both tracks are LOADED';
@@ -52,4 +51,5 @@
 
   </script>
 </body>
+
 </html>

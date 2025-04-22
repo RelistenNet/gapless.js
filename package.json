@@ -1,15 +1,45 @@
 {
   "name": "gapless.js",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Gapless audio playback javascript plugin",
-  "main": "index.js",
+  "main": "dist/cjs/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.cts",
+        "default": "./dist/cjs/index.cjs"
+      }
+    }
+  },
+  "sideEffects": false,
+  "private": false,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsup",
+    "types": "tsc --noEmit"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/RelistenNet/gapless.js.git"
   },
   "author": "Daniel Saewitz",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@switz/eslint-config": "^12.3.2",
+    "eslint": "^9.25.1",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3"
+  }
 }
