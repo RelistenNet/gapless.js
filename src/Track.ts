@@ -300,6 +300,8 @@ export default class Track {
       // Ensure playback rate is 1 if it wasn't paused
       this.bufferSourceNode.playbackRate.value = 1;
       this.debug('Switched to WebAudio (Playing)');
+      // Start progress frame for playing state
+      this.requestProgressFrame();
     }
 
     this.playbackType = GaplessPlaybackType.WEBAUDIO;
@@ -338,12 +340,12 @@ export default class Track {
     // --- Web Audio Path ---
     if (this.audioBuffer && this.audioContext && !this.queue.state.webAudioIsDisabled) {
       // If already using WebAudio and it's ready
-      if (this.isUsingWebAudio) {
+      if (this.isUsingWebAudio && this.bufferSourceNode) {
         this.playWebAudio();
       }
-      // If HTML5 is playing/paused but WebAudio buffer is ready, switch
+      // If WebAudio buffer is ready but not yet using WebAudio, switch to it
       else if (this.webAudioLoadingState === GaplessPlaybackLoadingState.LOADED) {
-        this.debug('WebAudio buffer ready, switching from HTML5...');
+        this.debug('WebAudio buffer ready, switching to WebAudio...');
         this.switchToWebAudio(); // This will handle starting playback
         this.requestProgressFrame(); // Start progress updates after switch
       }
@@ -369,8 +371,15 @@ export default class Track {
   }
 
   private playWebAudio(): void {
-    if (!this.audioContext || !this.bufferSourceNode || !this.isPaused) {
-      // Already playing or not ready
+    if (!this.audioContext || !this.bufferSourceNode) {
+      // Not ready
+      this.debug('playWebAudio: audioContext or bufferSourceNode not available');
+      return;
+    }
+    
+    if (!this.isPaused) {
+      // Already playing
+      this.debug('playWebAudio: already playing, skipping');
       return;
     }
 
