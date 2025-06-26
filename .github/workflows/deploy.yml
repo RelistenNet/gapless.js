@@ -37,13 +37,15 @@ jobs:
         run: pnpm run build
       - name: Setup Pages
         uses: actions/configure-pages@v5
+      - name: Prepare upload directory
+        run: |
+          mkdir -p upload
+          cp index.html upload/
+          cp -r dist upload/
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Only upload index.html and dist/
-          path: |
-            index.html
-            dist
+          path: upload
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
