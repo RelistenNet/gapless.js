@@ -96,7 +96,7 @@
 
       // Player callbacks
       const onProgress = (track) => {
-        if (!track) return;
+        if (!track || !player) return;
 
         const currentLoadingState = track.webAudioLoadingState || 'NONE';
         const nextLoadingState = player.nextTrack?.webAudioLoadingState || 'NONE';
@@ -113,7 +113,7 @@
       };
 
       const onTrackChange = (track) => {
-        if (!track) return;
+        if (!track || !player) return;
         updateState({
           currentTrack: track,
           isPlaying: !track.isPaused,
@@ -124,35 +124,38 @@
       // Event handlers
       const controls = {
         playPause: () => {
+          if (!player) return;
           player.togglePlayPause();
           updateState({ isPlaying: !player.currentTrack?.isPaused });
         },
         
         previous: () => {
+          if (!player) return;
           player.playPrevious();
           if (player.currentTrack?.isPaused) player.play();
         },
         
         next: () => {
+          if (!player) return;
           player.playNext();
           if (player.currentTrack?.isPaused) player.play();
         },
         
         skipToEnd: () => {
-          if (player.currentTrack) {
-            player.currentTrack.seekToEnd(5);
-            console.log('Skipping to end for gapless test');
-          }
+          if (!player?.currentTrack) return;
+          player.currentTrack.seekToEnd(5);
+          console.log('Skipping to end for gapless test');
         },
         
         volume: (e) => {
+          if (!player) return;
           const vol = e.target.value;
           updateState({ volume: vol });
           player.setVolume(vol / 100);
         },
         
         seek: (e) => {
-          if (!player.currentTrack?.duration) return;
+          if (!player?.currentTrack?.duration) return;
           const rect = e.currentTarget.getBoundingClientRect();
           const x = e.clientX - rect.left;
           const percentage = Math.max(0, Math.min(1, x / rect.width));
@@ -161,7 +164,10 @@
           onProgress(player.currentTrack);
         },
         
-        selectTrack: (idx) => player.gotoTrack(idx, true)
+        selectTrack: (idx) => {
+          if (!player) return;
+          player.gotoTrack(idx, true);
+        }
       };
 
       // Initialize
