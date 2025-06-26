@@ -4,7 +4,9 @@ const PRELOAD_NUM_TRACKS = 2;
 
 const isBrowser: boolean = typeof window !== 'undefined';
 const audioContext: AudioContext | null =
-  isBrowser && typeof window.AudioContext !== 'undefined' ? new window.AudioContext() : null;
+  isBrowser && (window.AudioContext || (window as any).webkitAudioContext)
+    ? new (window.AudioContext || (window as any).webkitAudioContext)()
+    : null;
 
 // Define interfaces for props and state
 interface QueueProps {

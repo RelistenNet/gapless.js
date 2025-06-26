@@ -37,27 +37,27 @@
   </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
-  <div class="max-w-4xl mx-auto p-6">
+  <div class="max-w-4xl mx-auto p-4">
     <!-- Header -->
-    <header class="text-center mb-10">
-      <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
+    <header class="text-center mb-6">
+      <h1 class="text-3xl font-bold mb-1 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
         Gapless.js Demo
       </h1>
-      <p class="text-gray-400">Experience seamless audio playback with zero gaps between tracks</p>
+      <p class="text-gray-400 text-sm">Experience seamless audio playback with zero gaps between tracks</p>
     </header>
 
     <!-- Main Player -->
-    <div class="bg-gray-800 rounded-2xl shadow-2xl p-8 mb-6">
+    <div class="bg-gray-800 rounded-xl shadow-2xl p-6 mb-4">
       <!-- Current Track Info -->
-      <div class="text-center mb-6">
-        <h2 id="currentTrackTitle" class="text-2xl font-semibold mb-2">No track loaded</h2>
-        <div id="trackStatus" class="text-sm text-gray-400 mb-4">
+      <div class="text-center mb-4">
+        <h2 id="currentTrackTitle" class="text-xl font-semibold mb-1">No track loaded</h2>
+        <div id="trackStatus" class="text-sm text-gray-400">
           <span id="currentTime">0:00</span> / <span id="duration">0:00</span>
         </div>
       </div>
 
       <!-- Visualizer -->
-      <div class="flex justify-center items-center h-12 mb-6" id="visualizer">
+      <div class="flex justify-center items-center h-8 mb-4" id="visualizer">
         <div class="flex items-end h-full" id="soundwaveBars" style="display: none;">
           <div class="soundwave-bar"></div>
           <div class="soundwave-bar"></div>
@@ -68,50 +68,55 @@
       </div>
 
       <!-- Progress Bar -->
-      <div class="mb-6">
-        <div class="bg-gray-700 rounded-full h-3 overflow-hidden cursor-pointer" id="progressContainer">
+      <div class="mb-4">
+        <div class="bg-gray-700 rounded-full h-2 overflow-hidden cursor-pointer" id="progressContainer">
           <div class="progress-bar bg-gradient-to-r from-blue-500 to-purple-500 h-full rounded-full" id="progressBar" style="width: 0%"></div>
         </div>
       </div>
 
       <!-- Controls -->
-      <div class="flex justify-center items-center space-x-6 mb-6">
-        <button id="prevBtn" class="p-3 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors">
-          <i class="fas fa-backward text-xl"></i>
+      <div class="flex justify-center items-center space-x-4 mb-4">
+        <button id="prevBtn" class="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors">
+          <i class="fas fa-backward text-lg"></i>
         </button>
-        <button id="playPauseBtn" class="p-4 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors playing-indicator">
-          <i class="fas fa-play text-2xl w-8 text-center" id="playPauseIcon"></i>
+        <button id="playPauseBtn" class="p-3 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors playing-indicator">
+          <i class="fas fa-play text-xl w-6 text-center" id="playPauseIcon"></i>
         </button>
-        <button id="nextBtn" class="p-3 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors">
-          <i class="fas fa-forward text-xl"></i>
+        <button id="nextBtn" class="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors">
+          <i class="fas fa-forward text-lg"></i>
         </button>
       </div>
 
-      <!-- Volume Control -->
-      <div class="flex items-center justify-center space-x-3">
-        <i class="fas fa-volume-down text-gray-400"></i>
-        <input type="range" id="volumeSlider" min="0" max="100" value="70"
-               class="w-32 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer">
-        <i class="fas fa-volume-up text-gray-400"></i>
+      <!-- Volume Control and Test Button -->
+      <div class="flex items-center justify-center space-x-6">
+        <div class="flex items-center space-x-2">
+          <i class="fas fa-volume-down text-gray-400 text-sm"></i>
+          <input type="range" id="volumeSlider" min="0" max="100" value="70"
+                 class="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+          <i class="fas fa-volume-up text-gray-400 text-sm"></i>
+        </div>
+        <button id="skipToEndBtn" class="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-sm rounded-full transition-colors">
+          Skip to End (-5s)
+        </button>
       </div>
     </div>
 
     <!-- Playlist -->
-    <div class="bg-gray-800 rounded-2xl shadow-2xl p-6">
-      <h3 class="text-xl font-semibold mb-4 flex items-center">
+    <div class="bg-gray-800 rounded-xl shadow-2xl p-4">
+      <h3 class="text-lg font-semibold mb-3 flex items-center">
         <i class="fas fa-list-music mr-2"></i> Playlist
       </h3>
-      <div id="playlist" class="space-y-2">
+      <div id="playlist" class="space-y-1">
         <!-- Tracks will be inserted here -->
       </div>
     </div>
 
     <!-- Status Information -->
-    <div class="mt-6 bg-gray-800 rounded-2xl shadow-2xl p-6">
-      <h3 class="text-xl font-semibold mb-4 flex items-center">
+    <div class="mt-4 bg-gray-800 rounded-xl shadow-2xl p-4">
+      <h3 class="text-lg font-semibold mb-3 flex items-center">
         <i class="fas fa-info-circle mr-2"></i> Technical Status
       </h3>
-      <div class="grid grid-cols-2 gap-4 text-sm">
+      <div class="grid grid-cols-2 gap-3 text-sm">
         <div>
           <span class="text-gray-400">WebAudio Status:</span>
           <span id="webAudioStatus" class="ml-2 font-mono">Checking...</span>
@@ -178,6 +183,7 @@
     const soundwaveBars = document.getElementById('soundwaveBars');
     const currentTrackTitle = document.getElementById('currentTrackTitle');
     const playlist = document.getElementById('playlist');
+    const skipToEndBtn = document.getElementById('skipToEndBtn');
 
     // Event listeners
     playPauseBtn.addEventListener('click', () => {
@@ -185,8 +191,28 @@
       updatePlayPauseButton(!player.currentTrack?.isPaused);
     });
 
-    prevBtn.addEventListener('click', () => player.playPrevious());
-    nextBtn.addEventListener('click', () => player.playNext());
+    prevBtn.addEventListener('click', () => {
+      player.playPrevious();
+      // Ensure the track starts playing
+      if (player.currentTrack && player.currentTrack.isPaused) {
+        player.play();
+      }
+    });
+    
+    nextBtn.addEventListener('click', () => {
+      player.playNext();
+      // Ensure the track starts playing
+      if (player.currentTrack && player.currentTrack.isPaused) {
+        player.play();
+      }
+    });
+    
+    skipToEndBtn.addEventListener('click', () => {
+      if (player.currentTrack) {
+        player.currentTrack.seekToEnd(5); // Skip to 5 seconds before end
+        console.log('Skipping to end of track for gapless test');
+      }
+    });
 
     volumeSlider.addEventListener('input', (e) => {
       player.setVolume(e.target.value / 100);
@@ -211,7 +237,7 @@
     }
 
     function updatePlayPauseButton(isPlaying) {
-      playPauseIcon.className = isPlaying ? 'fas fa-pause text-2xl w-8 text-center' : 'fas fa-play text-2xl w-8 text-center';
+      playPauseIcon.className = isPlaying ? 'fas fa-pause text-xl w-6 text-center' : 'fas fa-play text-xl w-6 text-center';
       if (isPlaying) {
         playPauseBtn.classList.add('playing-indicator');
         soundwaveBars.style.display = 'flex';
@@ -235,8 +261,14 @@
       }
 
       // Update technical status
-      document.getElementById('webAudioStatus').textContent = track.isUsingWebAudio ? 'Enabled' : 'Disabled';
-      document.getElementById('webAudioStatus').className = track.isUsingWebAudio ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400';
+      const webAudioEnabled = track.isUsingWebAudio || (track.webAudioLoadingState === 'LOADED');
+      document.getElementById('webAudioStatus').textContent = webAudioEnabled ? 'Enabled' : 'Disabled';
+      document.getElementById('webAudioStatus').className = webAudioEnabled ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400';
+      
+      // Log WebAudio state for debugging
+      if (track.webAudioLoadingState) {
+        console.log('WebAudio Loading State:', track.webAudioLoadingState);
+      }
 
       document.getElementById('bufferStatus').textContent = track.isLoaded ? 'Ready' : 'Loading...';
       document.getElementById('bufferStatus').className = track.isLoaded ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400';
@@ -269,7 +301,7 @@
         const isActive = player.currentTrack?.idx === idx;
 
         const trackEl = document.createElement('div');
-        trackEl.className = `track-item p-3 rounded-lg cursor-pointer flex items-center space-x-3 ${
+        trackEl.className = `track-item p-2 rounded-lg cursor-pointer flex items-center space-x-3 ${
           isActive ? 'bg-blue-600 bg-opacity-20 border border-blue-500' : 'bg-gray-700 hover:bg-gray-600'
         }`;
 
@@ -300,6 +332,14 @@
 
     // Auto-play on load
     player.play();
+    
+    // Debug WebAudio status
+    console.log('Player initialized. WebAudio disabled?', player.webAudioIsDisabled);
+    
+    // Also update display for initial track
+    if (player.currentTrack) {
+      updateTrackDisplay(player.currentTrack);
+    }
   </script>
 </body>
 </html>
