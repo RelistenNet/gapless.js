@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gapless.js Demo - Seamless Audio Playback</title>
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
     @keyframes pulse-ring {
@@ -37,302 +38,306 @@
   </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
-  <div id="app"></div>
+  <div id="app">
+    <div class="max-w-4xl mx-auto p-4">
+      <!-- Header -->
+      <header class="text-center mb-6">
+        <h1 class="text-3xl font-bold mb-1 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
+          Gapless.js Demo
+        </h1>
+        <p class="text-gray-400 text-sm">Experience seamless audio playback with zero gaps between tracks</p>
+      </header>
+
+      <!-- Player -->
+      <div class="bg-gray-800 rounded-xl shadow-2xl p-6 mb-4">
+        <!-- Track Info -->
+        <div class="text-center mb-4">
+          <h2 class="text-xl font-semibold mb-1">{{ trackTitle }}</h2>
+          <div class="text-sm text-gray-400">
+            {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+          </div>
+        </div>
+
+        <!-- Visualizer -->
+        <div class="flex justify-center items-center h-8 mb-4">
+          <div v-show="isPlaying" class="flex items-end h-full">
+            <div v-for="n in 5" :key="n" class="soundwave-bar"></div>
+          </div>
+        </div>
+
+        <!-- Progress -->
+        <div class="mb-4">
+          <div @click="handleSeek" class="bg-gray-700 rounded-full h-2 overflow-hidden cursor-pointer">
+            <div class="progress-bar bg-gradient-to-r from-blue-500 to-purple-500 h-full rounded-full" 
+                 :style="{ width: progress + '%' }"></div>
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex justify-center items-center space-x-4 mb-4">
+          <button @click="controls.previous" class="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors">
+            <i class="fas fa-backward text-lg"></i>
+          </button>
+          <button @click="controls.playPause" 
+                  :class="'p-3 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors' + (isPlaying ? ' playing-indicator' : '')">
+            <i :class="isPlaying ? 'fas fa-pause text-xl w-6 text-center' : 'fas fa-play text-xl w-6 text-center'"></i>
+          </button>
+          <button @click="controls.next" class="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors">
+            <i class="fas fa-forward text-lg"></i>
+          </button>
+        </div>
+
+        <!-- Volume & Skip -->
+        <div class="flex items-center justify-center space-x-6">
+          <div class="flex items-center space-x-2">
+            <i class="fas fa-volume-down text-gray-400 text-sm"></i>
+            <input type="range" min="0" max="100" v-model="volume" @input="controls.volume"
+                   class="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+            <i class="fas fa-volume-up text-gray-400 text-sm"></i>
+          </div>
+          <button @click="controls.skipToEnd" class="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-sm rounded-full transition-colors">
+            Skip to End (-5s)
+          </button>
+        </div>
+      </div>
+
+      <!-- Playlist -->
+      <div class="bg-gray-800 rounded-xl shadow-2xl p-4">
+        <h3 class="text-lg font-semibold mb-3 flex items-center">
+          <i class="fas fa-list-music mr-2"></i> Playlist
+        </h3>
+        <div class="space-y-1">
+          <div v-for="(track, idx) in tracks" :key="idx"
+               @click="controls.selectTrack(idx)"
+               :class="'track-item p-2 rounded-lg cursor-pointer flex items-center space-x-3 ' + 
+                      (trackIdx === idx ? 'bg-blue-600 bg-opacity-20 border border-blue-500' : 'bg-gray-700 hover:bg-gray-600')">
+            <div class="text-2xl w-8 text-center">
+              <i v-if="trackIdx === idx && isPlaying" class="fas fa-volume-up text-blue-400"></i>
+              <span v-else class="text-gray-500">{{ idx + 1 }}</span>
+            </div>
+            <div class="flex-1">
+              <div class="font-semibold">{{ track.metadata?.title || `Track ${idx + 1}` }}</div>
+              <div class="text-sm text-gray-400">{{ track.metadata?.artist || 'Unknown Artist' }}</div>
+            </div>
+            <div class="text-sm text-gray-400">
+              {{ track.duration ? formatTime(track.duration) : '--:--' }}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status -->
+      <div class="mt-4 bg-gray-800 rounded-xl shadow-2xl p-4">
+        <h3 class="text-lg font-semibold mb-3 flex items-center">
+          <i class="fas fa-info-circle mr-2"></i> Technical Status
+        </h3>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <span class="text-gray-400">Current Track WebAudio:</span>
+            <span :class="getStatusClass(currentWebAudio, currentTrack?.isUsingWebAudio)">{{ currentWebAudio }}</span>
+          </div>
+          <div>
+            <span class="text-gray-400">Next Track WebAudio:</span>
+            <span :class="getStatusClass(nextWebAudio)">{{ nextWebAudio }}</span>
+          </div>
+          <div>
+            <span class="text-gray-400">Current Track:</span>
+            <span class="ml-2 font-mono">{{ trackIdx + 1 }} / {{ tracks.length }}</span>
+          </div>
+          <div>
+            <span class="text-gray-400">Playback Mode:</span>
+            <span :class="playbackMode === 'WebAudio' ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400'">{{ playbackMode }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script type="module">
-    import { createSignal, onMount, onCleanup } from "https://cdn.skypack.dev/solid-js";
-    import { render } from "https://cdn.skypack.dev/solid-js/web";
-    import html from "https://cdn.skypack.dev/solid-js/html";
     import Gapless from './dist/index.mjs';
 
-    const App = () => {
-      // State
-      const [state, setState] = createSignal({
-        currentTrack: null,
-        isPlaying: false,
-        currentTime: 0,
-        duration: 0,
-        progress: 0,
-        volume: 70,
-        trackIdx: 0,
-        currentWebAudio: 'Checking...',
-        nextWebAudio: 'N/A',
-        playbackMode: 'N/A',
-        tracks: []
-      });
+    const { createApp, ref, reactive, computed, onMounted, onUnmounted } = Vue;
 
-      // Constants
-      const TRACKS = [
-        "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t02.mp3",
-        "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t03.mp3",
-        "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t04.mp3"
-      ];
+    createApp({
+      setup() {
+        // Reactive state
+        const currentTrack = ref(null);
+        const isPlaying = ref(false);
+        const currentTime = ref(0);
+        const duration = ref(0);
+        const progress = ref(0);
+        const volume = ref(70);
+        const trackIdx = ref(0);
+        const currentWebAudio = ref('Checking...');
+        const nextWebAudio = ref('N/A');
+        const playbackMode = ref('N/A');
+        const tracks = ref([]);
 
-      const METADATA = [
-        { title: "Scarlet Begonias", artist: "Grateful Dead", album: "Cornell 5/8/77" },
-        { title: "Fire on the Mountain", artist: "Grateful Dead", album: "Cornell 5/8/77" },
-        { title: "Estimated Prophet", artist: "Grateful Dead", album: "Cornell 5/8/77" }
-      ];
+        // Constants
+        const TRACKS = [
+          "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t02.mp3",
+          "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t03.mp3",
+          "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t04.mp3"
+        ];
 
-      let player;
+        const METADATA = [
+          { title: "Scarlet Begonias", artist: "Grateful Dead", album: "Cornell 5/8/77" },
+          { title: "Fire on the Mountain", artist: "Grateful Dead", album: "Cornell 5/8/77" },
+          { title: "Estimated Prophet", artist: "Grateful Dead", album: "Cornell 5/8/77" }
+        ];
 
-      // Utilities
-      const formatTime = (seconds) => {
-        if (!seconds || isNaN(seconds)) return '0:00';
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
-      };
+        let player = null;
 
-      const getStatusClass = (status, isActive = false) => {
-        const base = 'ml-2 font-mono text-xs';
-        if (isActive) return `${base} text-green-400`;
-        if (status?.includes('LOADED')) return `${base} text-blue-400`;
-        if (status?.includes('LOADING')) return `${base} text-yellow-400`;
-        return `${base} text-gray-400`;
-      };
-
-      const updateState = (updates) => setState(prev => ({ ...prev, ...updates }));
-
-      // Player callbacks
-      const onProgress = (track) => {
-        if (!track || !player) return;
-
-        const currentLoadingState = track.webAudioLoadingState || 'NONE';
-        const nextLoadingState = player.nextTrack?.webAudioLoadingState || 'NONE';
-
-        updateState({
-          currentTime: track.currentTime,
-          duration: track.duration,
-          progress: track.duration ? (track.currentTime / track.duration) * 100 : 0,
-          trackIdx: track.idx,
-          currentWebAudio: `${currentLoadingState}${track.isUsingWebAudio ? ' (Active)' : ''}`,
-          nextWebAudio: player.nextTrack ? nextLoadingState : 'N/A',
-          playbackMode: track.isUsingWebAudio ? 'WebAudio' : 'HTML5'
+        // Computed values
+        const trackTitle = computed(() => {
+          const meta = currentTrack.value?.metadata || {};
+          return meta.title || `Track ${trackIdx.value + 1}`;
         });
-      };
 
-      const onTrackChange = (track) => {
-        if (!track || !player) return;
-        updateState({
-          currentTrack: track,
-          isPlaying: !track.isPaused,
-          tracks: [...player.tracks]
-        });
-      };
+        // Utilities
+        const formatTime = (seconds) => {
+          if (!seconds || isNaN(seconds)) return '0:00';
+          const mins = Math.floor(seconds / 60);
+          const secs = Math.floor(seconds % 60);
+          return `${mins}:${secs.toString().padStart(2, '0')}`;
+        };
 
-      // Event handlers
-      const controls = {
-        playPause: () => {
-          if (!player) return;
-          player.togglePlayPause();
-          updateState({ isPlaying: !player.currentTrack?.isPaused });
-        },
-        
-        previous: () => {
-          if (!player) return;
-          player.playPrevious();
-          if (player.currentTrack?.isPaused) player.play();
-        },
-        
-        next: () => {
-          if (!player) return;
-          player.playNext();
-          if (player.currentTrack?.isPaused) player.play();
-        },
-        
-        skipToEnd: () => {
-          if (!player?.currentTrack) return;
-          player.currentTrack.seekToEnd(5);
-          console.log('Skipping to end for gapless test');
-        },
-        
-        volume: (e) => {
-          if (!player) return;
-          const vol = e.target.value;
-          updateState({ volume: vol });
-          player.setVolume(vol / 100);
-        },
-        
-        seek: (e) => {
+        const getStatusClass = (status, isActive = false) => {
+          const base = 'ml-2 font-mono text-xs';
+          if (isActive) return `${base} text-green-400`;
+          if (status?.includes('LOADED')) return `${base} text-blue-400`;
+          if (status?.includes('LOADING')) return `${base} text-yellow-400`;
+          return `${base} text-gray-400`;
+        };
+
+        // Player callbacks
+        const onProgress = (track) => {
+          if (!track || !player) return;
+
+          const currentLoadingState = track.webAudioLoadingState || 'NONE';
+          const nextLoadingState = player.nextTrack?.webAudioLoadingState || 'NONE';
+
+          currentTime.value = track.currentTime;
+          duration.value = track.duration;
+          progress.value = track.duration ? (track.currentTime / track.duration) * 100 : 0;
+          trackIdx.value = track.idx;
+          currentWebAudio.value = `${currentLoadingState}${track.isUsingWebAudio ? ' (Active)' : ''}`;
+          nextWebAudio.value = player.nextTrack ? nextLoadingState : 'N/A';
+          playbackMode.value = track.isUsingWebAudio ? 'WebAudio' : 'HTML5';
+        };
+
+        const onTrackChange = (track) => {
+          if (!track || !player) return;
+          currentTrack.value = track;
+          isPlaying.value = !track.isPaused;
+          tracks.value = [...player.tracks];
+        };
+
+        // Event handlers
+        const controls = {
+          playPause: () => {
+            if (!player) return;
+            player.togglePlayPause();
+            isPlaying.value = !player.currentTrack?.isPaused;
+          },
+          
+          previous: () => {
+            if (!player) return;
+            player.playPrevious();
+            if (player.currentTrack?.isPaused) player.play();
+          },
+          
+          next: () => {
+            if (!player) return;
+            player.playNext();
+            if (player.currentTrack?.isPaused) player.play();
+          },
+          
+          skipToEnd: () => {
+            if (!player?.currentTrack) return;
+            player.currentTrack.seekToEnd(5);
+            console.log('Skipping to end for gapless test');
+          },
+          
+          volume: () => {
+            if (!player) return;
+            player.setVolume(volume.value / 100);
+          },
+          
+          selectTrack: (idx) => {
+            if (!player) return;
+            player.gotoTrack(idx, true);
+          }
+        };
+
+        const handleSeek = (event) => {
           if (!player?.currentTrack?.duration) return;
-          const rect = e.currentTarget.getBoundingClientRect();
-          const x = e.clientX - rect.left;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const x = event.clientX - rect.left;
           const percentage = Math.max(0, Math.min(1, x / rect.width));
           const newTime = percentage * player.currentTrack.duration;
           player.currentTrack.seek(newTime);
           onProgress(player.currentTrack);
-        },
-        
-        selectTrack: (idx) => {
-          if (!player) return;
-          player.gotoTrack(idx, true);
-        }
-      };
+        };
 
-      // Initialize
-      onMount(() => {
-        player = new Gapless({
-          tracks: TRACKS,
-          onProgress,
-          onPlayNextTrack: onTrackChange,
-          onPlayPreviousTrack: onTrackChange,
-          onStartNewTrack: onTrackChange,
-          onEnded: () => updateState({ isPlaying: false })
+        // Initialize
+        onMounted(() => {
+          player = new Gapless({
+            tracks: TRACKS,
+            onProgress,
+            onPlayNextTrack: onTrackChange,
+            onPlayPreviousTrack: onTrackChange,
+            onStartNewTrack: onTrackChange,
+            onEnded: () => { isPlaying.value = false; }
+          });
+
+          // Add metadata to tracks
+          player.tracks.forEach((track, idx) => {
+            track.metadata = METADATA[idx];
+          });
+
+          // Update state with tracks immediately
+          tracks.value = [...player.tracks];
+          
+          player.setVolume(0.7);
+          player.play();
+
+          // Debug
+          console.log('Player initialized with tracks:', player.tracks.length);
+          console.log('Vue tracks:', tracks.value.length);
+
+          if (player.currentTrack) onTrackChange(player.currentTrack);
         });
 
-        // Add metadata to tracks
-        player.tracks.forEach((track, idx) => {
-          track.metadata = METADATA[idx];
+        onUnmounted(() => {
+          player?.cleanUp();
         });
 
-        // Update state with tracks immediately
-        updateState({ tracks: [...player.tracks] });
-        
-        player.setVolume(0.7);
-        player.play();
-
-        // Debug
-        console.log('Player initialized with tracks:', player.tracks.length);
-        console.log('State tracks:', state().tracks.length);
-
-        if (player.currentTrack) onTrackChange(player.currentTrack);
-      });
-
-      onCleanup(() => player?.cleanUp());
-
-      // Computed values
-      const trackTitle = () => {
-        const s = state();
-        const currentMeta = s.currentTrack?.metadata || {};
-        return currentMeta.title || `Track ${s.trackIdx + 1}`;
-      };
-
-      return html`
-        <div class="max-w-4xl mx-auto p-4">
-          <!-- Header -->
-          <header class="text-center mb-6">
-            <h1 class="text-3xl font-bold mb-1 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
-              Gapless.js Demo
-            </h1>
-            <p class="text-gray-400 text-sm">Experience seamless audio playback with zero gaps between tracks</p>
-          </header>
-
-          <!-- Player -->
-          <div class="bg-gray-800 rounded-xl shadow-2xl p-6 mb-4">
-            <!-- Track Info -->
-            <div class="text-center mb-4">
-              <h2 class="text-xl font-semibold mb-1">${trackTitle}</h2>
-              <div class="text-sm text-gray-400">
-                ${() => formatTime(state().currentTime)} / ${() => formatTime(state().duration)}
-              </div>
-            </div>
-
-            <!-- Visualizer -->
-            <div class="flex justify-center items-center h-8 mb-4">
-              <div class="flex items-end h-full" style="${() => state().isPlaying ? 'display: flex;' : 'display: none;'}">
-                ${Array(5).fill().map(() => html`<div class="soundwave-bar"></div>`)}
-              </div>
-            </div>
-
-            <!-- Progress -->
-            <div class="mb-4">
-              <div class="bg-gray-700 rounded-full h-2 overflow-hidden cursor-pointer" onclick=${controls.seek}>
-                <div class="progress-bar bg-gradient-to-r from-blue-500 to-purple-500 h-full rounded-full" 
-                     style="width: ${() => state().progress}%"></div>
-              </div>
-            </div>
-
-            <!-- Controls -->
-            <div class="flex justify-center items-center space-x-4 mb-4">
-              <button onclick=${controls.previous} class="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors">
-                <i class="fas fa-backward text-lg"></i>
-              </button>
-              <button onclick=${controls.playPause} 
-                      class="${() => 'p-3 rounded-full bg-blue-600 hover:bg-blue-700 transition-colors' + (state().isPlaying ? ' playing-indicator' : '')}">
-                <i class="${() => state().isPlaying ? 'fas fa-pause text-xl w-6 text-center' : 'fas fa-play text-xl w-6 text-center'}"></i>
-              </button>
-              <button onclick=${controls.next} class="p-2 rounded-full bg-gray-700 hover:bg-gray-600 transition-colors">
-                <i class="fas fa-forward text-lg"></i>
-              </button>
-            </div>
-
-            <!-- Volume & Skip -->
-            <div class="flex items-center justify-center space-x-6">
-              <div class="flex items-center space-x-2">
-                <i class="fas fa-volume-down text-gray-400 text-sm"></i>
-                <input type="range" min="0" max="100" value=${() => state().volume} oninput=${controls.volume}
-                       class="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
-                <i class="fas fa-volume-up text-gray-400 text-sm"></i>
-              </div>
-              <button onclick=${controls.skipToEnd} class="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-sm rounded-full transition-colors">
-                Skip to End (-5s)
-              </button>
-            </div>
-          </div>
-
-          <!-- Playlist -->
-          <div class="bg-gray-800 rounded-xl shadow-2xl p-4">
-            <h3 class="text-lg font-semibold mb-3 flex items-center">
-              <i class="fas fa-list-music mr-2"></i> Playlist
-            </h3>
-            <div class="space-y-1">
-              ${() => (state().tracks || []).map((track, idx) => {
-                const meta = track.metadata || {};
-                const isActive = state().trackIdx === idx;
-                const isCurrentlyPlaying = isActive && state().isPlaying;
-                
-                return html`
-                  <div onclick=${() => controls.selectTrack(idx)}
-                       class="${'track-item p-2 rounded-lg cursor-pointer flex items-center space-x-3 ' + 
-                              (isActive ? 'bg-blue-600 bg-opacity-20 border border-blue-500' : 'bg-gray-700 hover:bg-gray-600')}">
-                    <div class="text-2xl w-8 text-center">
-                      ${isCurrentlyPlaying ? 
-                        html`<i class="fas fa-volume-up text-blue-400"></i>` : 
-                        html`<span class="text-gray-500">${idx + 1}</span>`}
-                    </div>
-                    <div class="flex-1">
-                      <div class="font-semibold">${meta.title || `Track ${idx + 1}`}</div>
-                      <div class="text-sm text-gray-400">${meta.artist || 'Unknown Artist'}</div>
-                    </div>
-                    <div class="text-sm text-gray-400">
-                      ${track.duration ? formatTime(track.duration) : '--:--'}
-                    </div>
-                  </div>
-                `;
-              })}
-            </div>
-          </div>
-
-          <!-- Status -->
-          <div class="mt-4 bg-gray-800 rounded-xl shadow-2xl p-4">
-            <h3 class="text-lg font-semibold mb-3 flex items-center">
-              <i class="fas fa-info-circle mr-2"></i> Technical Status
-            </h3>
-            <div class="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <span class="text-gray-400">Current Track WebAudio:</span>
-                <span class="${() => getStatusClass(state().currentWebAudio, state().currentTrack?.isUsingWebAudio)}">${() => state().currentWebAudio}</span>
-              </div>
-              <div>
-                <span class="text-gray-400">Next Track WebAudio:</span>
-                <span class="${() => getStatusClass(state().nextWebAudio)}">${() => state().nextWebAudio}</span>
-              </div>
-              <div>
-                <span class="text-gray-400">Current Track:</span>
-                <span class="ml-2 font-mono">${() => `${state().trackIdx + 1} / ${(state().tracks || []).length}`}</span>
-              </div>
-              <div>
-                <span class="text-gray-400">Playback Mode:</span>
-                <span class="${() => state().playbackMode === 'WebAudio' ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400'}">${() => state().playbackMode}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      `;
-    };
-
-    render(App, document.getElementById("app"));
+        return {
+          // State
+          currentTrack,
+          isPlaying,
+          currentTime,
+          duration,
+          progress,
+          volume,
+          trackIdx,
+          currentWebAudio,
+          nextWebAudio,
+          playbackMode,
+          tracks,
+          
+          // Computed
+          trackTitle,
+          
+          // Methods
+          formatTime,
+          getStatusClass,
+          controls,
+          handleSeek
+        };
+      }
+    }).mount('#app');
   </script>
 </body>
 </html>
