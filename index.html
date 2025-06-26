@@ -132,8 +132,8 @@
     </div>
   </div>
 
-  <script type="text/javascript" src="./dist/cjs/index.cjs"></script>
-  <script type="text/javascript">
+  <script type="module">
+    import Gapless from './dist/index.mjs';
     // Track metadata
     const trackMetadata = [
       { title: "Electric Dreams", artist: "JRAD", album: "Live 2017-03-17" },
@@ -143,7 +143,7 @@
     ];
 
     // Initialize player
-    window.player = new Gapless.Queue({
+    window.player = new Gapless({
       tracks: [
         "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t03.mp3",
         "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t04.mp3",
