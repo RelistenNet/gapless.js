@@ -13,7 +13,7 @@
       100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
     }
     .playing-indicator { animation: pulse-ring 2s ease-in-out infinite; }
-
+    
     @keyframes soundwave {
       0%, 100% { height: 5px; }
       50% { height: 20px; }
@@ -29,10 +29,10 @@
     .soundwave-bar:nth-child(3) { animation: soundwave 0.5s ease-in-out 0.2s infinite; }
     .soundwave-bar:nth-child(4) { animation: soundwave 0.5s ease-in-out 0.3s infinite; }
     .soundwave-bar:nth-child(5) { animation: soundwave 0.5s ease-in-out 0.4s infinite; }
-
+    
     .track-item { transition: all 0.3s ease; }
     .track-item:hover { transform: translateX(5px); }
-
+    
     .progress-bar { transition: width 0.1s linear; }
   </style>
 </head>
@@ -118,20 +118,20 @@
       </h3>
       <div class="grid grid-cols-2 gap-3 text-sm">
         <div>
-          <span class="text-gray-400">WebAudio Status:</span>
-          <span id="webAudioStatus" class="ml-2 font-mono">Checking...</span>
+          <span class="text-gray-400">Current Track WebAudio:</span>
+          <span id="currentWebAudioStatus" class="ml-2 font-mono text-xs">Checking...</span>
         </div>
         <div>
-          <span class="text-gray-400">Buffer Status:</span>
-          <span id="bufferStatus" class="ml-2 font-mono">N/A</span>
+          <span class="text-gray-400">Next Track WebAudio:</span>
+          <span id="nextWebAudioStatus" class="ml-2 font-mono text-xs">N/A</span>
         </div>
         <div>
           <span class="text-gray-400">Current Track:</span>
           <span id="currentTrackIdx" class="ml-2 font-mono">N/A</span>
         </div>
         <div>
-          <span class="text-gray-400">Next Track Loaded:</span>
-          <span id="nextTrackLoaded" class="ml-2 font-mono">N/A</span>
+          <span class="text-gray-400">Playback Mode:</span>
+          <span id="playbackMode" class="ml-2 font-mono">N/A</span>
         </div>
       </div>
     </div>
@@ -139,21 +139,20 @@
 
   <script type="module">
     import Gapless from './dist/index.mjs';
+    
     // Track metadata
     const trackMetadata = [
-      { title: "Electric Dreams", artist: "JRAD", album: "Live 2017-03-17" },
-      { title: "Cosmic Highway", artist: "JRAD", album: "Live 2017-03-17" },
-      { title: "Starlight Serenade", artist: "JRAD", album: "Live 2017-03-17" },
-      { title: "Neon Nights", artist: "JRAD", album: "Live 2017-03-17" }
+      { title: "Scarlet Begonias", artist: "Grateful Dead", album: "Cornell 5/8/77" },
+      { title: "Fire on the Mountain", artist: "Grateful Dead", album: "Cornell 5/8/77" },
+      { title: "Estimated Prophet", artist: "Grateful Dead", album: "Cornell 5/8/77" }
     ];
 
     // Initialize player
     window.player = new Gapless({
       tracks: [
-        "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t03.mp3",
-        "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t04.mp3",
-        "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t05.mp3",
-        "https://archive.org/download/jrad2017-03-17.cmc621.cmc64.sbd.matrix.flac16/jrad2017-03-17.cmc621.cmc64.sbd.matrix-s2t06.mp3"
+        "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t02.mp3",
+        "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t03.mp3",
+        "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t04.mp3"
       ],
       onProgress: updateProgress,
       onPlayNextTrack: updateTrackDisplay,
@@ -222,9 +221,10 @@
       if (player.currentTrack && player.currentTrack.duration) {
         const rect = progressContainer.getBoundingClientRect();
         const x = e.clientX - rect.left;
-        const percentage = x / rect.width;
+        const percentage = Math.max(0, Math.min(1, x / rect.width));
         const newTime = percentage * player.currentTrack.duration;
         player.currentTrack.seek(newTime);
+        updateProgress(player.currentTrack); // Force immediate update
       }
     });
 
@@ -260,24 +260,38 @@
         progressBar.style.width = `${percentage}%`;
       }
 
-      // Update technical status
-      const webAudioEnabled = track.isUsingWebAudio || (track.webAudioLoadingState === 'LOADED');
-      document.getElementById('webAudioStatus').textContent = webAudioEnabled ? 'Enabled' : 'Disabled';
-      document.getElementById('webAudioStatus').className = webAudioEnabled ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400';
+      // Update technical status for current track
+      const currentLoadingState = track.webAudioLoadingState || 'NONE';
+      const currentStatusText = `${currentLoadingState}${track.isUsingWebAudio ? ' (Active)' : ''}`;
+      document.getElementById('currentWebAudioStatus').textContent = currentStatusText;
+      document.getElementById('currentWebAudioStatus').className = 
+        track.isUsingWebAudio ? 'ml-2 font-mono text-xs text-green-400' : 
+        currentLoadingState === 'LOADED' ? 'ml-2 font-mono text-xs text-blue-400' : 
+        currentLoadingState === 'LOADING' ? 'ml-2 font-mono text-xs text-yellow-400' : 
+        'ml-2 font-mono text-xs text-gray-400';
       
-      // Log WebAudio state for debugging
-      if (track.webAudioLoadingState) {
-        console.log('WebAudio Loading State:', track.webAudioLoadingState);
+      // Update next track WebAudio status
+      if (player.nextTrack) {
+        const nextLoadingState = player.nextTrack.webAudioLoadingState || 'NONE';
+        document.getElementById('nextWebAudioStatus').textContent = nextLoadingState;
+        document.getElementById('nextWebAudioStatus').className = 
+          nextLoadingState === 'LOADED' ? 'ml-2 font-mono text-xs text-green-400' : 
+          nextLoadingState === 'LOADING' ? 'ml-2 font-mono text-xs text-yellow-400' : 
+          'ml-2 font-mono text-xs text-gray-400';
+      } else {
+        document.getElementById('nextWebAudioStatus').textContent = 'N/A';
+        document.getElementById('nextWebAudioStatus').className = 'ml-2 font-mono text-xs text-gray-400';
       }
-
-      document.getElementById('bufferStatus').textContent = track.isLoaded ? 'Ready' : 'Loading...';
-      document.getElementById('bufferStatus').className = track.isLoaded ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400';
-
+      
       document.getElementById('currentTrackIdx').textContent = `${track.idx + 1} / ${player.tracks.length}`;
-
-      const nextTrackStatus = player.nextTrack?.isLoaded ? 'Yes' : 'No';
-      document.getElementById('nextTrackLoaded').textContent = nextTrackStatus;
-      document.getElementById('nextTrackLoaded').className = player.nextTrack?.isLoaded ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400';
+      document.getElementById('playbackMode').textContent = track.isUsingWebAudio ? 'WebAudio' : 'HTML5';
+      document.getElementById('playbackMode').className = track.isUsingWebAudio ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400';
+      
+      // Debug logging
+      console.log(`Track ${track.idx + 1} - WebAudio: ${currentLoadingState}, Using: ${track.isUsingWebAudio}`);
+      if (player.nextTrack) {
+        console.log(`Next Track ${player.nextTrack.idx + 1} - WebAudio: ${player.nextTrack.webAudioLoadingState || 'NONE'}`);
+      }
     }
 
     function updateTrackDisplay(track) {
@@ -289,7 +303,7 @@
 
       // Update playlist highlighting
       renderPlaylist();
-
+      
       // Update play/pause button
       updatePlayPauseButton(!track.isPaused);
     }
@@ -299,12 +313,12 @@
       player.tracks.forEach((track, idx) => {
         const metadata = track.metadata || {};
         const isActive = player.currentTrack?.idx === idx;
-
+        
         const trackEl = document.createElement('div');
         trackEl.className = `track-item p-2 rounded-lg cursor-pointer flex items-center space-x-3 ${
           isActive ? 'bg-blue-600 bg-opacity-20 border border-blue-500' : 'bg-gray-700 hover:bg-gray-600'
         }`;
-
+        
         trackEl.innerHTML = `
           <div class="text-2xl w-8 text-center">
             ${isActive && !player.currentTrack.isPaused ? '<i class="fas fa-volume-up text-blue-400"></i>' : `<span class="text-gray-500">${idx + 1}</span>`}
@@ -317,11 +331,11 @@
             ${track.duration ? formatTime(track.duration) : '--:--'}
           </div>
         `;
-
+        
         trackEl.addEventListener('click', () => {
           player.gotoTrack(idx, true);
         });
-
+        
         playlist.appendChild(trackEl);
       });
     }
@@ -335,6 +349,7 @@
     
     // Debug WebAudio status
     console.log('Player initialized. WebAudio disabled?', player.webAudioIsDisabled);
+    console.log('AudioContext available?', window.AudioContext || window.webkitAudioContext);
     
     // Also update display for initial track
     if (player.currentTrack) {
