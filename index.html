@@ -26,7 +26,7 @@
   <div onClick="player.currentTrack.togglePlayPause()">Toggle Play/Pause</div>
   <pre id="ready">Both tracks are not loaded</pre>
   <pre id="status"></pre>
-  <script type="text/javascript" src="./dist/cjs/index.cjs"></script>
+  <script type="text/javascript" src="./dist/cjs/index.cjs" type="module"></script>
   <script type="text/javascript">
     window.player = new Gapless.Queue({
       tracks: [
