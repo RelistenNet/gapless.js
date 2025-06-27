@@ -8,6 +8,9 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <style>
+    body {
+      background: #333;
+    }
     @keyframes pulse-ring {
       0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
       70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); }
@@ -35,6 +38,17 @@
     .track-item:hover { transform: translateX(5px); }
 
     .progress-bar { transition: width 0.1s linear; }
+
+    .loading-track {
+      background: linear-gradient(90deg, #374151 25%, #4b5563 50%, #374151 75%);
+      background-size: 200% 100%;
+      animation: loading-shimmer 2s ease-in-out infinite;
+    }
+
+    @keyframes loading-shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
   </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
@@ -43,9 +57,9 @@
       <!-- Header -->
       <header class="text-center mb-6">
         <h1 class="text-3xl font-bold mb-1 bg-gradient-to-r from-blue-400 to-purple-600 bg-clip-text text-transparent">
-          Gapless.js Demo
+          Gapless.js Demo (XState)
         </h1>
-        <p class="text-gray-400 text-sm">Experience seamless audio playback with zero gaps between tracks</p>
+        <p class="text-gray-400 text-sm">Experience seamless audio playback with state machine architecture</p>
       </header>
 
       <!-- Player -->
@@ -55,6 +69,12 @@
           <h2 class="text-xl font-semibold mb-1">{{ trackTitle }}</h2>
           <div class="text-sm text-gray-400">
             {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+          </div>
+          <div v-if="!playerInitialized" class="text-sm text-yellow-400 mt-1">
+            <i class="fas fa-spinner fa-spin mr-1"></i> Initializing player...
+          </div>
+          <div v-else-if="tracks.length === 0" class="text-sm text-yellow-400 mt-1">
+            <i class="fas fa-spinner fa-spin mr-1"></i> Loading tracks...
           </div>
         </div>
 
@@ -103,50 +123,92 @@
 
       <!-- Playlist -->
       <div class="bg-gray-800 rounded-xl shadow-2xl p-4">
-        <h3 class="text-lg font-semibold mb-3 flex items-center">
-          <i class="fas fa-list-music mr-2"></i> Playlist
+        <h3 class="text-lg font-semibold mb-3 flex items-center justify-between">
+          <div class="flex items-center">
+            <i class="fas fa-list-music mr-2"></i> Playlist
+          </div>
+          <div class="text-sm text-gray-400 flex items-center space-x-2">
+            <span v-if="trackStates.filter(s => s?.loading).length > 0" class="text-yellow-400">
+              <i class="fas fa-spinner fa-spin"></i> {{ trackStates.filter(s => s?.loading).length }} loading
+            </span>
+            <span class="text-green-400">
+              <i class="fas fa-check-circle"></i> {{ trackStates.filter(s => s?.loaded).length }}/{{ tracks.length }} ready
+            </span>
+          </div>
         </h3>
         <div class="space-y-1">
+          <div v-if="tracks.length === 0" class="p-4 text-center text-gray-400">
+            <i class="fas fa-spinner fa-spin mr-2"></i> Loading playlist...
+          </div>
           <div v-for="(track, idx) in tracks" :key="idx"
                @click="controls.selectTrack(idx)"
-               :class="'track-item p-2 rounded-lg cursor-pointer flex items-center space-x-3 ' +
-                      (trackIdx === idx ? 'bg-blue-600 bg-opacity-20 border border-blue-500' : 'bg-gray-700 hover:bg-gray-600')">
+               :class="[
+                 'track-item p-2 rounded-lg cursor-pointer flex items-center space-x-3',
+                 trackIdx === idx ? 'bg-blue-600 bg-opacity-20 border border-blue-500' :
+                   trackStates[idx]?.loading ? 'loading-track' : 'bg-gray-700 hover:bg-gray-600'
+               ]">
             <div class="text-2xl w-8 text-center">
               <i v-if="trackIdx === idx && isPlaying" class="fas fa-volume-up text-blue-400"></i>
               <span v-else class="text-gray-500">{{ idx + 1 }}</span>
             </div>
             <div class="flex-1">
               <div class="font-semibold">{{ track.metadata?.title || `Track ${idx + 1}` }}</div>
-              <div class="text-sm text-gray-400">{{ track.metadata?.artist || 'Unknown Artist' }}</div>
+              <div class="text-sm text-gray-400 flex items-center">
+                <span>{{ track.metadata?.artist || 'Unknown Artist' }}</span>
+                <span v-if="trackStates[idx]?.loading" class="ml-2 text-yellow-400">
+                  <i class="fas fa-spinner fa-spin"></i> Loading WebAudio...
+                </span>
+                <span v-else-if="trackStates[idx]?.loaded" class="ml-2 text-green-400">
+                  <i class="fas fa-check-circle"></i> WebAudio Ready
+                </span>
+                <span v-else class="ml-2 text-gray-500">
+                  <i class="fas fa-music"></i> HTML5
+                </span>
+              </div>
             </div>
-            <div class="text-sm text-gray-400">
-              {{ track.duration ? formatTime(track.duration) : '--:--' }}
+            <div class="text-sm text-gray-400 flex flex-col items-end">
+              <div>3:45</div>
+              <div class="text-xs" :class="{
+                'text-yellow-400': trackStates[idx]?.loading,
+                'text-green-400': trackStates[idx]?.loaded && trackStates[idx]?.playbackType === 'WEBAUDIO',
+                'text-blue-400': trackStates[idx]?.playbackType === 'HTML5'
+              }">
+                {{ trackStates[idx]?.playbackType || 'HTML5' }}
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Status -->
+      <!-- State Machine Status -->
       <div class="mt-4 bg-gray-800 rounded-xl shadow-2xl p-4">
         <h3 class="text-lg font-semibold mb-3 flex items-center">
-          <i class="fas fa-info-circle mr-2"></i> Technical Status
+          <i class="fas fa-cogs mr-2"></i> State Machine Status
         </h3>
         <div class="grid grid-cols-2 gap-3 text-sm">
           <div>
-            <span class="text-gray-400">Current Track WebAudio:</span>
-            <span :class="getStatusClass(currentWebAudio, currentTrack?.isUsingWebAudio)">{{ currentWebAudio }}</span>
-          </div>
-          <div>
-            <span class="text-gray-400">Next Track WebAudio:</span>
-            <span :class="getStatusClass(nextWebAudio)">{{ nextWebAudio }}</span>
+            <span class="text-gray-400">Queue State:</span>
+            <span class="ml-2 font-mono text-blue-400">{{ queueState }}</span>
           </div>
           <div>
             <span class="text-gray-400">Current Track:</span>
-            <span class="ml-2 font-mono">{{ trackIdx + 1 }} / {{ tracks.length }}</span>
+            <span class="ml-2 font-mono text-green-400">{{ currentTrackIndex + 1 }} / {{ tracks.length }}</span>
           </div>
           <div>
-            <span class="text-gray-400">Playback Mode:</span>
-            <span :class="playbackMode === 'WebAudio' ? 'ml-2 font-mono text-green-400' : 'ml-2 font-mono text-yellow-400'">{{ playbackMode }}</span>
+            <span class="text-gray-400">WebAudio Context:</span>
+            <span class="ml-2 font-mono text-green-400">{{ webAudioEnabled ? 'Available' : 'Disabled' }}</span>
+          </div>
+          <div>
+            <span class="text-gray-400">Volume:</span>
+            <span class="ml-2 font-mono text-purple-400">{{ Math.round(playerVolume * 100) }}%</span>
+          </div>
+          <div>
+            <span class="text-gray-400">Loading Tracks:</span>
+            <span class="ml-2 font-mono text-yellow-400">{{ trackStates.filter(s => s?.loading).length }}</span>
+          </div>
+          <div>
+            <span class="text-gray-400">WebAudio Ready:</span>
+            <span class="ml-2 font-mono text-green-400">{{ trackStates.filter(s => s?.loaded).length }} / {{ tracks.length }}</span>
           </div>
         </div>
       </div>
@@ -157,12 +219,8 @@
           <h3 class="text-lg font-semibold flex items-center">
             <i class="fas fa-bug mr-2"></i> Debug State
           </h3>
-          <button @click="showDebug = !showDebug"
-                  class="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-sm rounded transition-colors">
-            {{ showDebug ? 'Hide' : 'Show' }}
-          </button>
         </div>
-        <div v-show="showDebug">
+        <div>
           <pre class="bg-gray-900 p-3 rounded text-xs text-green-400 overflow-auto max-h-96 font-mono">{{ debugState }}</pre>
         </div>
       </div>
@@ -170,26 +228,12 @@
   </div>
 
   <script type="module">
-    import Gapless from './dist/index.mjs';
+    import { Gapless } from './dist/index.mjs';
 
-    const { createApp, ref, reactive, computed, onMounted, onUnmounted } = Vue;
+    const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
 
     createApp({
       setup() {
-        // Reactive state
-        const currentTrack = ref(null);
-        const isPlaying = ref(false);
-        const currentTime = ref(0);
-        const duration = ref(0);
-        const progress = ref(0);
-        const volume = ref(70);
-        const trackIdx = ref(0);
-        const currentWebAudio = ref('Checking...');
-        const nextWebAudio = ref('N/A');
-        const playbackMode = ref('N/A');
-        const tracks = ref([]);
-        const showDebug = ref(false);
-
         // Constants
         const TRACKS = [
           "https://archive.org/download/gd1977-05-08.148737.SBD.Betty.Anon.Noel.t-flac2448/gd77-05-08.s2t02.mp3",
@@ -203,67 +247,273 @@
           { title: "Estimated Prophet", artist: "Grateful Dead", album: "Cornell 5/8/77" }
         ];
 
-        let player = null;
+        // Reactive state
+        const playerInitialized = ref(false);
+        const gaplessPlayer = ref(null);
+        const volume = ref(70);
+        const currentTime = ref(0);
+        const duration = ref(0);
+        const currentTrackIndex = ref(0);
+        const isPlaying = ref(false);
+        const isPaused = ref(false);
+        const queueState = ref('idle');
+        const playerVolume = ref(1);
+        const webAudioEnabled = ref(false);
 
-        // Computed values
-        const trackTitle = computed(() => {
-          const meta = currentTrack.value?.metadata || {};
-          return meta.title || `Track ${trackIdx.value + 1}`;
-        });
+        // Progress tracking interval
+        let progressInterval = null;
+        let stateSubscription = null;
+        let trackSubscriptions = [];
 
-        const debugState = computed(() => {
-          const state = {
-            // Vue reactive state
-            vue: {
-              currentTime: currentTime.value,
-              duration: duration.value,
-              progress: progress.value,
-              volume: volume.value,
-              trackIdx: trackIdx.value,
-              isPlaying: isPlaying.value,
-              currentWebAudio: currentWebAudio.value,
-              nextWebAudio: nextWebAudio.value,
-              playbackMode: playbackMode.value,
-              tracksCount: tracks.value.length
+        // Track previous states for transition logging
+        let previousQueueState = null;
+        let previousTrackStates = [];
+
+        // Initialize gapless player
+        const initializePlayer = () => {
+          gaplessPlayer.value = new Gapless({
+            tracks: TRACKS,
+            onProgress: (trackInfo) => {
+              currentTime.value = trackInfo.currentTime;
+              duration.value = trackInfo.duration;
+              currentTrackIndex.value = trackInfo.idx;
+              isPlaying.value = trackInfo.isPlaying;
+              isPaused.value = trackInfo.isPaused;
+              playerVolume.value = trackInfo.volume;
             },
-            // Current track state
-            currentTrack: currentTrack.value ? {
-              idx: currentTrack.value.idx,
-              currentTime: currentTrack.value.currentTime,
-              duration: currentTrack.value.duration,
-              isPaused: currentTrack.value.isPaused,
-              isLoaded: currentTrack.value.isLoaded,
-              isUsingWebAudio: currentTrack.value.isUsingWebAudio,
-              webAudioLoadingState: currentTrack.value.webAudioLoadingState,
-              playbackType: currentTrack.value.playbackType,
-              state: currentTrack.value.state,
-              completeState: currentTrack.value.completeState,
-              metadata: currentTrack.value.metadata
-            } : null,
-            // Next track state
-            nextTrack: player?.nextTrack ? {
-              idx: player.nextTrack.idx,
-              isLoaded: player.nextTrack.isLoaded,
-              isUsingWebAudio: player.nextTrack.isUsingWebAudio,
-              webAudioLoadingState: player.nextTrack.webAudioLoadingState,
-              playbackType: player.nextTrack.playbackType,
-              metadata: player.nextTrack.metadata
-            } : null,
-            // Player state
-            player: player ? {
-              webAudioIsDisabled: player.webAudioIsDisabled,
-              currentTrackIdx: player.currentTrack?.idx || null,
-              nextTrackIdx: player.nextTrack?.idx || null,
-              tracksLength: player.tracks?.length || 0
-            } : null,
-            // Browser info
-            browser: {
-              audioContext: !!(window.AudioContext || window.webkitAudioContext),
-              userAgent: navigator.userAgent.substring(0, 100) + '...'
+            onEnded: () => {
+              console.log('Playlist ended');
+            },
+            onPlayNextTrack: (trackActor) => {
+              console.log('Playing next track:', trackActor, new Error().stack);
+              currentTrackIndex.value = gaplessPlayer.value.currentTrackIndex;
+            },
+            onPlayPreviousTrack: (trackActor) => {
+              console.log('Playing previous track:', trackActor);
+              currentTrackIndex.value = gaplessPlayer.value.currentTrackIndex;
+            },
+            onStartNewTrack: (trackActor) => {
+              console.log('Starting new track:', trackActor);
+              currentTrackIndex.value = gaplessPlayer.value.currentTrackIndex;
+            }
+          });
+
+          playerInitialized.value = true;
+          webAudioEnabled.value = !!(window.AudioContext || window.webkitAudioContext);
+
+          // Subscribe to queue state changes with transition logging
+          stateSubscription = gaplessPlayer.value.queueActor.subscribe((snapshot) => {
+            const currentState = snapshot.status === 'active' ? snapshot.value : snapshot.status;
+
+            // Only log if state actually transitioned
+            if (previousQueueState !== null && previousQueueState !== currentState) {
+              console.log('🎵 QUEUE STATE TRANSITION:', {
+                from: previousQueueState,
+                to: currentState,
+                context: snapshot.status === 'active' ? {
+                  currentTrackIdx: snapshot.context?.currentTrackIdx,
+                  volume: snapshot.context?.volume,
+                  tracksCount: snapshot.context?.trackActors?.length
+                } : null
+              });
+            }
+
+            previousQueueState = currentState;
+
+            if (snapshot.status === 'active') {
+              queueState.value = snapshot.value;
+              isPlaying.value = snapshot.value === 'playing';
+              isPaused.value = snapshot.value === 'paused';
+
+              // Update current track index from context
+              const context = snapshot.context;
+              if (context) {
+                currentTrackIndex.value = context.currentTrackIdx;
+                playerVolume.value = context.volume;
+              }
+
+              // Update track states when queue state changes
+              updateTrackStates();
+            }
+          });
+
+          // Initialize track states
+          updateTrackStates();
+
+          // Subscribe to individual track actors for immediate updates
+          const setupTrackSubscriptions = () => {
+            // Clear existing subscriptions
+            trackSubscriptions.forEach(sub => sub.unsubscribe());
+            trackSubscriptions = [];
+
+            // Subscribe to each track actor
+            if (gaplessPlayer.value) {
+              const trackActors = gaplessPlayer.value.tracks;
+
+              // Initialize previous states array
+              previousTrackStates = trackActors.map(() => null);
+
+              trackActors.forEach((trackActor, idx) => {
+                if (trackActor) {
+                  const subscription = trackActor.subscribe((snapshot) => {
+                    const currentTrackState = {
+                      status: snapshot.status,
+                      audioSource: snapshot.status === 'active' && snapshot.matches ?
+                        (snapshot.matches({ audioSource: 'webaudio' }) ? 'WEBAUDIO' :
+                         snapshot.matches({ audioSource: 'loadingWebAudio' }) ? 'LOADING' : 'HTML5') : 'unknown',
+                      playback: snapshot.status === 'active' && snapshot.matches ?
+                        (snapshot.matches({ playback: 'playing' }) ? 'PLAYING' :
+                         snapshot.matches({ playback: 'paused' }) ? 'PAUSED' : 'IDLE') : 'unknown'
+                    };
+
+                    // Only log if state actually transitioned
+                    const prevState = previousTrackStates[idx];
+                    if (prevState !== null && (
+                      prevState.status !== currentTrackState.status ||
+                      prevState.audioSource !== currentTrackState.audioSource ||
+                      prevState.playback !== currentTrackState.playback
+                    )) {
+                      console.log(`🎧 TRACK ${idx} STATE TRANSITION:`, {
+                        from: prevState,
+                        to: currentTrackState,
+                        context: snapshot.status === 'active' ? {
+                          currentTime: snapshot.context?.currentTime,
+                          duration: snapshot.context?.duration,
+                          hasBuffer: !!snapshot.context?.audioBuffer,
+                          hasAudio: !!snapshot.context?.audio
+                        } : null
+                      });
+                    }
+
+                    previousTrackStates[idx] = currentTrackState;
+
+                    // Update track states when any track state changes
+                    updateTrackStates();
+                  });
+                  trackSubscriptions.push(subscription);
+                }
+              });
             }
           };
 
-          return JSON.stringify(state, null, 2);
+          // Setup initial track subscriptions
+          setTimeout(setupTrackSubscriptions, 100);
+
+          // Start progress tracking
+          progressInterval = setInterval(() => {
+            if (gaplessPlayer.value && gaplessPlayer.value.isPlaying) {
+              // Get current track info from the current track actor
+              const currentTrack = gaplessPlayer.value.currentTrack;
+              if (currentTrack) {
+                const snapshot = currentTrack.getSnapshot();
+                if (snapshot.status === 'active' && snapshot.context) {
+                  currentTime.value = snapshot.context.currentTime || 0;
+                  duration.value = snapshot.context.duration || 0;
+                }
+              }
+            }
+
+            // Update track states periodically
+            updateTrackStates();
+          }, 100);
+        };
+
+        // Computed values
+        const trackTitle = computed(() => {
+          const track = tracks.value[currentTrackIndex.value];
+          return track?.metadata?.title || `Track ${currentTrackIndex.value + 1}`;
+        });
+
+        const tracks = computed(() => {
+          return TRACKS.map((url, idx) => ({
+            url,
+            metadata: METADATA[idx] || {}
+          }));
+        });
+
+        const trackIdx = computed(() => currentTrackIndex.value);
+
+        const progress = computed(() => {
+          const dur = duration.value;
+          const curr = currentTime.value;
+          return dur ? (curr / dur) * 100 : 0;
+        });
+
+        // Reactive track states
+        const trackStates = ref([]);
+
+        // Function to update track states
+        const updateTrackStates = () => {
+          if (!gaplessPlayer.value) {
+            trackStates.value = tracks.value.map(() => ({ loading: false, loaded: false, playbackType: 'HTML5' }));
+            return;
+          }
+
+          const trackActors = gaplessPlayer.value.tracks;
+          trackStates.value = tracks.value.map((_, idx) => {
+            const trackActor = trackActors[idx];
+
+            if (!trackActor) return { loading: false, loaded: false, playbackType: 'HTML5' };
+
+            const snapshot = trackActor.getSnapshot();
+            if (snapshot.status !== 'active') return { loading: false, loaded: false, playbackType: 'HTML5' };
+
+            const isLoadingWebAudio = snapshot.matches({ audioSource: 'loadingWebAudio' });
+            const isWebAudio = snapshot.matches({ audioSource: 'webaudio' });
+            const hasBuffer = snapshot.context?.audioBuffer;
+
+            return {
+              loading: isLoadingWebAudio,
+              loaded: hasBuffer,
+              playbackType: isWebAudio ? 'WEBAUDIO' : 'HTML5',
+              state: snapshot.value
+            };
+          });
+        };
+
+        const debugState = computed(() => {
+          const debugData = {
+            player: {
+              initialized: playerInitialized.value,
+              isPlaying: isPlaying.value,
+              isPaused: isPaused.value,
+              currentTrackIndex: currentTrackIndex.value,
+              currentTime: currentTime.value,
+              duration: duration.value,
+              volume: playerVolume.value,
+              tracksCount: tracks.value.length
+            },
+            queue: {
+              state: queueState.value,
+              trackActors: gaplessPlayer.value ? gaplessPlayer.value.tracks.length : 0,
+              loadingTracks: trackStates.value.filter(s => s?.loading).length,
+              loadedTracks: trackStates.value.filter(s => s?.loaded).length
+            },
+            currentTrack: (() => {
+              if (!gaplessPlayer.value) return null;
+              const currentTrack = gaplessPlayer.value.currentTrack;
+              if (!currentTrack) return null;
+              const snapshot = currentTrack.getSnapshot();
+              return {
+                state: snapshot.value,
+                context: snapshot.status === 'active' ? {
+                  currentTime: snapshot.context?.currentTime,
+                  duration: snapshot.context?.duration,
+                  volume: snapshot.context?.volume,
+                  playbackType: snapshot.matches({ audioSource: 'webaudio' }) ? 'WEBAUDIO' : 'HTML5'
+                } : null
+              };
+            })(),
+            trackStates: trackStates.value.map((state, idx) => ({
+              index: idx,
+              ...state
+            })),
+            browser: {
+              audioContext: webAudioEnabled.value,
+              userAgent: navigator.userAgent.substring(0, 100) + '...'
+            }
+          };
+          return JSON.stringify(debugData, null, 2);
         });
 
         // Utilities
@@ -274,151 +524,128 @@
           return `${mins}:${secs.toString().padStart(2, '0')}`;
         };
 
-        const getStatusClass = (status, isActive = false) => {
-          const base = 'ml-2 font-mono text-xs';
-          if (isActive) return `${base} text-green-400`;
-          if (status?.includes('LOADED')) return `${base} text-blue-400`;
-          if (status?.includes('LOADING')) return `${base} text-yellow-400`;
-          return `${base} text-gray-400`;
-        };
-
-        // Player callbacks
-        const onProgress = (track) => {
-          if (!track || !player) return;
-          console.debug('Progress', {
-            trackIdx: track.idx,
-            currentTime: track.currentTime,
-            duration: track.duration,
-            progress: track.duration ? (track.currentTime / track.duration) * 100 : 0,
-            isUsingWebAudio: track.isUsingWebAudio,
-            webAudioLoadingState: track.webAudioLoadingState,
-            isPaused: track.isPaused,
-            playbackType: track.playbackType,
-            nextTrackIdx: player.nextTrack?.idx,
-            nextWebAudioLoadingState: player.nextTrack?.webAudioLoadingState
-          });
-
-          const currentLoadingState = track.webAudioLoadingState || 'NONE';
-          const nextLoadingState = player.nextTrack?.webAudioLoadingState || 'NONE';
-
-          currentTime.value = track.currentTime;
-          duration.value = track.duration;
-          progress.value = track.duration ? (track.currentTime / track.duration) * 100 : 0;
-          trackIdx.value = track.idx;
-          currentWebAudio.value = `${currentLoadingState}${track.isUsingWebAudio ? ' (Active)' : ''}`;
-          nextWebAudio.value = player.nextTrack ? nextLoadingState : 'N/A';
-          playbackMode.value = track.isUsingWebAudio ? 'WebAudio' : 'HTML5';
-        };
-
-        const onTrackChange = (track) => {
-          if (!track || !player) return;
-          currentTrack.value = track;
-          isPlaying.value = !track.isPaused;
-          tracks.value = [...player.tracks];
-        };
-
-        // Event handlers
+        // Event handlers with logging
         const controls = {
           playPause: () => {
-            if (!player) return;
-            player.togglePlayPause();
-            isPlaying.value = !player.currentTrack?.isPaused;
+            if (!gaplessPlayer.value) return;
+
+            const action = isPlaying.value ? 'PAUSE' : 'PLAY';
+            console.log(`🎮 USER ACTION: ${action}`);
+
+            if (isPlaying.value) {
+              gaplessPlayer.value.pause();
+            } else {
+              gaplessPlayer.value.play();
+            }
           },
 
           previous: () => {
-            if (!player) return;
-            player.playPrevious();
-            if (player.currentTrack?.isPaused) player.play();
+            if (gaplessPlayer.value) {
+              console.log('🎮 USER ACTION: PREVIOUS');
+              gaplessPlayer.value.previous();
+            }
           },
 
           next: () => {
-            if (!player) return;
-            player.playNext();
-            if (player.currentTrack?.isPaused) player.play();
+            if (gaplessPlayer.value) {
+              console.log('🎮 USER ACTION: NEXT');
+              gaplessPlayer.value.next();
+            }
           },
 
           skipToEnd: () => {
-            if (!player?.currentTrack) return;
-            player.currentTrack.seekToEnd(5);
-            console.log('Skipping to end for gapless test');
+            if (gaplessPlayer.value && duration.value > 5) {
+              const seekTime = duration.value - 5;
+              console.log(`🎮 USER ACTION: SKIP_TO_END (${seekTime}s)`);
+              gaplessPlayer.value.seek(seekTime);
+            }
           },
 
           volume: () => {
-            if (!player) return;
-            player.setVolume(volume.value / 100);
+            if (gaplessPlayer.value) {
+              const vol = volume.value / 100;
+              console.log(`🎮 USER ACTION: SET_VOLUME (${vol})`);
+              gaplessPlayer.value.setVolume(vol);
+            }
           },
 
           selectTrack: (idx) => {
-            if (!player) return;
-            player.gotoTrack(idx, true);
+            if (gaplessPlayer.value) {
+              console.log(`🎮 USER ACTION: SELECT_TRACK (${idx})`);
+              gaplessPlayer.value.gotoTrack(idx, true);
+            }
           }
         };
 
         const handleSeek = (event) => {
-          if (!player?.currentTrack?.duration) return;
-          const rect = event.currentTarget.getBoundingClientRect();
-          const x = event.clientX - rect.left;
-          const percentage = Math.max(0, Math.min(1, x / rect.width));
-          const newTime = percentage * player.currentTrack.duration;
-          player.currentTrack.seek(newTime);
-          onProgress(player.currentTrack);
+          if (!gaplessPlayer.value || !duration.value) return;
+
+          try {
+            const rect = event.currentTarget.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const percentage = Math.max(0, Math.min(1, x / rect.width));
+            const newTime = percentage * duration.value;
+
+            console.log(`🎮 USER ACTION: SEEK (${newTime.toFixed(2)}s)`);
+            gaplessPlayer.value.seek(newTime);
+          } catch (error) {
+            console.warn('Error in handleSeek:', error);
+          }
         };
 
         // Initialize
         onMounted(() => {
-          player = new Gapless({
-            tracks: TRACKS,
-            onProgress,
-            onPlayNextTrack: onTrackChange,
-            onPlayPreviousTrack: onTrackChange,
-            onStartNewTrack: onTrackChange,
-            onEnded: () => { isPlaying.value = false; }
-          });
+          initializePlayer();
 
-          // Add metadata to tracks
-          player.tracks.forEach((track, idx) => {
-            track.metadata = METADATA[idx];
-          });
+          // Start playing after a short delay
+          setTimeout(() => {
+            if (gaplessPlayer.value) {
+              gaplessPlayer.value.play();
+            }
+          }, 1000);
 
-          // Update state with tracks immediately
-          tracks.value = [...player.tracks];
-
-          player.setVolume(0.7);
-          player.play();
-
-          // Debug
-          console.log('Player initialized with tracks:', player.tracks.length);
-          console.log('Vue tracks:', tracks.value.length);
-
-          if (player.currentTrack) onTrackChange(player.currentTrack);
+          console.log('Gapless XState player initialized with tracks:', TRACKS.length);
         });
 
         onUnmounted(() => {
-          player?.cleanUp();
+          if (progressInterval) {
+            clearInterval(progressInterval);
+          }
+          if (stateSubscription) {
+            stateSubscription.unsubscribe();
+          }
+          // Clean up track subscriptions
+          trackSubscriptions.forEach(sub => sub.unsubscribe());
+          trackSubscriptions = [];
+
+          if (gaplessPlayer.value) {
+            gaplessPlayer.value.destroy();
+          }
         });
 
         return {
           // State
-          currentTrack,
-          isPlaying,
+          playerInitialized,
           currentTime,
           duration,
           progress,
-          volume,
-          trackIdx,
-          currentWebAudio,
-          nextWebAudio,
-          playbackMode,
+          trackIdx: currentTrackIndex,
+          currentTrackIndex,
+          isPlaying,
+          isPaused,
           tracks,
-          showDebug,
+          volume,
 
           // Computed
           trackTitle,
+          queueState,
+          webAudioEnabled,
+          playerVolume,
           debugState,
+          trackStates,
 
           // Methods
           formatTime,
-          getStatusClass,
           controls,
           handleSeek
         };

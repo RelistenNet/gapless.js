@@ -6,6 +6,10 @@ const commonOptions = {
   sourcemap: true,
   clean: true,
   minify: true,
+  bundle: true,
+  external: [], // Bundle all dependencies including XState
+  noExternal: ['xstate'], // Force XState to be bundled inline
+  platform: 'browser' as const, // Ensure browser-compatible build
 };
 
 export default defineConfig(() => [
