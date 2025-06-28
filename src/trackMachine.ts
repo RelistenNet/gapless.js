@@ -550,6 +550,7 @@ export const createTrackMachine = setup({
             SWITCH_TO_WEBAUDIO: {
               target: 'webaudio',
               guard: 'hasWebAudioBuffer',
+              actions: ['destroyAudioElement'],
             },
           },
         },
@@ -570,8 +571,8 @@ export const createTrackMachine = setup({
           entry: 'setupWebAudio',
           on: {
             DEACTIVATE: {
-              target: 'html',
-              actions: 'cleanupWebAudio',
+              target: 'webaudio',
+              actions: 'pausePlayback',
             },
           },
         },
