@@ -14,6 +14,7 @@ export interface GaplessOptions {
   onPlayPreviousTrack?: (track: TrackActor) => void;
   onStartNewTrack?: (track: TrackActor) => void;
   webAudioIsDisabled?: boolean;
+  trackMetadata?: Array<{ title?: string; artist?: string; album?: string; artwork?: string }>;
 }
 
 export class Gapless {
@@ -37,7 +38,7 @@ export class Gapless {
 
   togglePlayPause() {
     const snapshot = this._queueActor.getSnapshot();
-    if (snapshot.status === 'active' && (snapshot as any).value === 'playing') {
+    if (snapshot.status === 'active' && snapshot.value === 'playing') {
       this.pause();
     } else {
       this.play();
@@ -75,8 +76,8 @@ export class Gapless {
 
   removeTrack(trackIndex: number) {
     const snapshot = this._queueActor.getSnapshot();
-    if (snapshot.status === 'active') {
-      const context = (snapshot as any).context;
+    if (snapshot.status === 'active' && 'context' in snapshot) {
+      const context = snapshot.context as { trackActors?: TrackActor[] };
       const track = context?.trackActors?.[trackIndex];
       if (track) {
         this._queueActor.send({ type: 'REMOVE_TRACK', track });
@@ -86,17 +87,17 @@ export class Gapless {
 
   get currentTrack(): TrackActor | undefined {
     const snapshot = this._queueActor.getSnapshot();
-    if (snapshot.status === 'active') {
-      const context = (snapshot as any).context;
-      return context?.trackActors?.[context?.currentTrackIdx];
+    if (snapshot.status === 'active' && 'context' in snapshot) {
+      const context = snapshot.context as { trackActors?: TrackActor[]; currentTrackIdx?: number };
+      return context?.trackActors?.[context?.currentTrackIdx || 0];
     }
     return undefined;
   }
 
   get currentTrackIndex(): number {
     const snapshot = this._queueActor.getSnapshot();
-    if (snapshot.status === 'active') {
-      const context = (snapshot as any).context;
+    if (snapshot.status === 'active' && 'context' in snapshot) {
+      const context = snapshot.context as { currentTrackIdx?: number };
       return context?.currentTrackIdx || 0;
     }
     return 0;
@@ -104,8 +105,8 @@ export class Gapless {
 
   get tracks(): TrackActor[] {
     const snapshot = this._queueActor.getSnapshot();
-    if (snapshot.status === 'active') {
-      const context = (snapshot as any).context;
+    if (snapshot.status === 'active' && 'context' in snapshot) {
+      const context = snapshot.context as { trackActors?: TrackActor[] };
       return context?.trackActors || [];
     }
     return [];
@@ -113,18 +114,18 @@ export class Gapless {
 
   get isPlaying(): boolean {
     const snapshot = this._queueActor.getSnapshot();
-    return snapshot.status === 'active' && (snapshot as any).value === 'playing';
+    return snapshot.status === 'active' && snapshot.value === 'playing';
   }
 
   get isPaused(): boolean {
     const snapshot = this._queueActor.getSnapshot();
-    return snapshot.status === 'active' && (snapshot as any).value === 'paused';
+    return snapshot.status === 'active' && snapshot.value === 'paused';
   }
 
   get volume(): number {
     const snapshot = this._queueActor.getSnapshot();
-    if (snapshot.status === 'active') {
-      const context = (snapshot as any).context;
+    if (snapshot.status === 'active' && 'context' in snapshot) {
+      const context = snapshot.context as { volume?: number };
       return context?.volume || 1;
     }
     return 1;

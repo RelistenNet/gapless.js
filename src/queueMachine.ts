@@ -13,6 +13,7 @@ interface QueueContext {
   onPlayNextTrack?: (track: TrackActor) => void;
   onPlayPreviousTrack?: (track: TrackActor) => void;
   onStartNewTrack?: (track: TrackActor) => void;
+  trackMetadata?: Array<{ title?: string; artist?: string; album?: string; artwork?: string }>;
 }
 
 type QueueEvent =
@@ -26,7 +27,8 @@ type QueueEvent =
   | { type: 'SEEK'; time: number }
   | { type: 'SET_VOLUME'; volume: number }
   | { type: 'ADD_TRACK'; trackUrl: string; skipHEAD?: boolean; metadata?: Record<string, unknown> }
-  | { type: 'REMOVE_TRACK'; track: TrackActor };
+  | { type: 'REMOVE_TRACK'; track: TrackActor }
+  | { type: 'INTERNAL_UPDATE_MEDIA_SESSION' };
 
 export const createQueueMachine = setup({
   types: {
@@ -40,6 +42,7 @@ export const createQueueMachine = setup({
       onPlayPreviousTrack?: (track: TrackActor) => void;
       onStartNewTrack?: (track: TrackActor) => void;
       webAudioIsDisabled?: boolean;
+      trackMetadata?: Array<{ title?: string; artist?: string; album?: string; artwork?: string }>;
     },
   },
   actions: {
@@ -129,7 +132,7 @@ export const createQueueMachine = setup({
     },
 
     autoAdvanceToNext: assign({
-      currentTrackIdx: ({ context }) => {
+      currentTrackIdx: ({ context, self }) => {
         console.log('🚀 QUEUE: Auto-advancing to next track');
         const currentActor = context.trackActors[context.currentTrackIdx];
         if (currentActor) {
@@ -164,6 +167,11 @@ export const createQueueMachine = setup({
           if (context.onStartNewTrack) {
             context.onStartNewTrack(nextActor);
           }
+
+          // Update MediaSession for new track after state changes
+          setTimeout(() => {
+            self.send({ type: 'INTERNAL_UPDATE_MEDIA_SESSION' });
+          }, 50);
 
           console.log(`🚀 QUEUE: Advanced to track ${nextIdx}`);
           return nextIdx;
@@ -382,6 +390,109 @@ export const createQueueMachine = setup({
         context.onEnded();
       }
     },
+
+    setupMediaSession: ({ context, self }) => {
+      if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
+        // Set up action handlers for device controls
+        navigator.mediaSession.setActionHandler('play', () => {
+          console.log('📱 DEVICE: Play button pressed');
+          self.send({ type: 'PLAY' });
+        });
+
+        navigator.mediaSession.setActionHandler('pause', () => {
+          console.log('📱 DEVICE: Pause button pressed');
+          self.send({ type: 'PAUSE' });
+        });
+
+        navigator.mediaSession.setActionHandler('previoustrack', () => {
+          console.log('📱 DEVICE: Previous track button pressed');
+          self.send({ type: 'PREVIOUS' });
+        });
+
+        navigator.mediaSession.setActionHandler('nexttrack', () => {
+          console.log('📱 DEVICE: Next track button pressed');
+          self.send({ type: 'NEXT' });
+        });
+
+        // Optional: seek handlers
+        navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+          console.log('📱 DEVICE: Seek backward', details);
+          const currentActor = context.trackActors[context.currentTrackIdx];
+          if (currentActor) {
+            const snapshot = currentActor.getSnapshot();
+            if (snapshot.status === 'active' && snapshot.context) {
+              const currentTime = snapshot.context.currentTime || 0;
+              const seekTime = Math.max(0, currentTime - (details.seekOffset || 10));
+              self.send({ type: 'SEEK', time: seekTime });
+            }
+          }
+        });
+
+        navigator.mediaSession.setActionHandler('seekforward', (details) => {
+          console.log('📱 DEVICE: Seek forward', details);
+          const currentActor = context.trackActors[context.currentTrackIdx];
+          if (currentActor) {
+            const snapshot = currentActor.getSnapshot();
+            if (snapshot.status === 'active' && snapshot.context) {
+              const currentTime = snapshot.context.currentTime || 0;
+              const duration = snapshot.context.duration || 0;
+              const seekTime = Math.min(duration, currentTime + (details.seekOffset || 10));
+              self.send({ type: 'SEEK', time: seekTime });
+            }
+          }
+        });
+
+        navigator.mediaSession.setActionHandler('seekto', (details) => {
+          console.log('📱 DEVICE: Seek to position', details);
+          if (details.seekTime !== undefined) {
+            self.send({ type: 'SEEK', time: details.seekTime });
+          }
+        });
+
+        console.log('📱 DEVICE: MediaSession API initialized');
+      } else {
+        console.log('📱 DEVICE: MediaSession API not supported');
+      }
+    },
+
+    updateMediaSessionMetadata: ({ context }) => {
+      if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
+        const currentTrackMeta = context.trackMetadata?.[context.currentTrackIdx];
+        const defaultTitle = `Track ${context.currentTrackIdx + 1}`;
+        
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: currentTrackMeta?.title || defaultTitle,
+          artist: currentTrackMeta?.artist || 'Unknown Artist',
+          album: currentTrackMeta?.album || 'Gapless Playlist',
+          artwork: currentTrackMeta?.artwork ? [
+            { src: currentTrackMeta.artwork, sizes: '96x96', type: 'image/png' },
+            { src: currentTrackMeta.artwork, sizes: '128x128', type: 'image/png' },
+            { src: currentTrackMeta.artwork, sizes: '192x192', type: 'image/png' },
+            { src: currentTrackMeta.artwork, sizes: '256x256', type: 'image/png' },
+            { src: currentTrackMeta.artwork, sizes: '384x384', type: 'image/png' },
+            { src: currentTrackMeta.artwork, sizes: '512x512', type: 'image/png' },
+          ] : []
+        });
+
+        console.log('📱 DEVICE: Updated MediaSession metadata', {
+          title: currentTrackMeta?.title || defaultTitle,
+          artist: currentTrackMeta?.artist || 'Unknown Artist'
+        });
+      }
+    },
+
+    updateMediaSessionPlaybackState: ({ context }) => {
+      if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
+        // Get current state from context or derive it
+        const isPlaying = context.trackActors.some(actor => {
+          const snapshot = actor.getSnapshot();
+          return snapshot.status === 'active' && snapshot.matches && snapshot.matches({ playback: 'playing' });
+        });
+        
+        navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+        console.log('📱 DEVICE: Updated playback state to', navigator.mediaSession.playbackState);
+      }
+    },
   },
   guards: {
     isLastTrack: ({ context }) => {
@@ -391,7 +502,7 @@ export const createQueueMachine = setup({
 }).createMachine({
   id: 'queue',
   initial: 'paused',
-  entry: ['spawnInitialTracks', 'loadCurrentTrack'],
+  entry: ['spawnInitialTracks', 'loadCurrentTrack', 'setupMediaSession', 'updateMediaSessionMetadata'],
   context: ({ input }) => ({
     tracks: input?.tracks || [],
     currentTrackIdx: 0,
@@ -403,13 +514,14 @@ export const createQueueMachine = setup({
     onPlayNextTrack: input?.onPlayNextTrack,
     onPlayPreviousTrack: input?.onPlayPreviousTrack,
     onStartNewTrack: input?.onStartNewTrack,
+    trackMetadata: input?.trackMetadata || [],
   }),
   states: {
     playing: {
       on: {
         PAUSE: {
           target: 'paused',
-          actions: 'pauseCurrentTrack',
+          actions: ['pauseCurrentTrack', 'updateMediaSessionPlaybackState'],
         },
         TRACK_ENDED: [
           {
@@ -435,6 +547,8 @@ export const createQueueMachine = setup({
             'playCurrentTrack',
             'notifyStartNewTrack',
             'loadCurrentTrack',
+            'updateMediaSessionMetadata',
+            'updateMediaSessionPlaybackState',
           ],
         },
         SEEK: {
@@ -458,7 +572,7 @@ export const createQueueMachine = setup({
       on: {
         PLAY: {
           target: 'playing',
-          actions: 'playCurrentTrack',
+          actions: ['playCurrentTrack', 'updateMediaSessionPlaybackState'],
         },
         NEXT: {
           actions: ['gotoNext'],
@@ -472,6 +586,7 @@ export const createQueueMachine = setup({
             'updateCurrentTrackIdx',
             'seekCurrentTrackToStart',
             'loadCurrentTrack',
+            'updateMediaSessionMetadata',
           ],
         },
         SEEK: {
@@ -500,6 +615,8 @@ export const createQueueMachine = setup({
             'activateCurrentTrack',
             'playCurrentTrack',
             'notifyStartNewTrack',
+            'updateMediaSessionMetadata',
+            'updateMediaSessionPlaybackState',
           ],
         },
         GOTO: {
@@ -511,6 +628,8 @@ export const createQueueMachine = setup({
             'playCurrentTrack',
             'notifyStartNewTrack',
             'loadCurrentTrack',
+            'updateMediaSessionMetadata',
+            'updateMediaSessionPlaybackState',
           ],
         },
         SET_VOLUME: {
@@ -526,6 +645,11 @@ export const createQueueMachine = setup({
           actions: 'handleTrackLoaded',
         },
       },
+    },
+  },
+  on: {
+    INTERNAL_UPDATE_MEDIA_SESSION: {
+      actions: ['updateMediaSessionMetadata', 'updateMediaSessionPlaybackState'],
     },
   },
 });

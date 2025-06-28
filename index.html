@@ -273,6 +273,7 @@
         const initializePlayer = () => {
           gaplessPlayer.value = new Gapless({
             tracks: TRACKS,
+            trackMetadata: METADATA,
             onProgress: (trackInfo) => {
               currentTime.value = trackInfo.currentTime;
               duration.value = trackInfo.duration;

@@ -70,9 +70,16 @@ const createAndStartBufferSource = (
   self: { send: (event: TrackEvent) => void },
   startTime: number
 ): void => {
-  if (!context.audioContext || !context.audioBuffer || !context.gainNode) {
-    console.warn('🎯 TRACK: Cannot create buffer source - missing audio resources');
+  if (!context.audioContext || !context.audioBuffer) {
+    console.warn('🎯 TRACK: Cannot create buffer source - missing audioContext or audioBuffer');
     return;
+  }
+
+  // Ensure gain node exists
+  if (!context.gainNode) {
+    console.log('🎯 TRACK: Creating missing gain node for buffer source');
+    context.gainNode = context.audioContext.createGain();
+    context.gainNode.gain.value = context.volume;
   }
 
   const position = Math.max(0, startTime);
@@ -122,7 +129,7 @@ export const createTrackMachine = setup({
         return audio;
       },
       gainNode: ({ context }) => {
-        if (!context.audioContext || context.webAudioIsDisabled) return null;
+        if (!context.audioContext) return null;
         const gainNode = context.audioContext.createGain();
         gainNode.gain.value = context.volume;
         return gainNode;
@@ -172,8 +179,9 @@ export const createTrackMachine = setup({
 
     createAudioElementIfNeeded: assign({
       audio: ({ context, self }) => {
-        // Only create audio element if we don't have WebAudio buffer and no audio element exists
-        if (!context.audioBuffer && !context.audio && isBrowser) {
+        // Only create audio element if no audio element exists
+        if (!context.audio && isBrowser) {
+          console.log('🎯 TRACK: Creating HTML5 audio element');
           const audio = new Audio();
           audio.controls = false;
           audio.volume = context.volume;
@@ -190,7 +198,9 @@ export const createTrackMachine = setup({
         return context.audio;
       },
       gainNode: ({ context }) => {
-        if (!context.gainNode && context.audioContext && !context.webAudioIsDisabled) {
+        // Always create gain node if we have audio context and don't have one yet
+        if (!context.gainNode && context.audioContext) {
+          console.log('🎯 TRACK: Creating gain node');
           const gainNode = context.audioContext.createGain();
           gainNode.gain.value = context.volume;
           return gainNode;
@@ -312,9 +322,16 @@ export const createTrackMachine = setup({
       const time = Math.max(0, event.time);
       console.log(`🎯 TRACK: WebAudio seek to ${time.toFixed(2)}s`);
 
-      if (!context.audioBuffer || !context.audioContext || !context.gainNode) {
-        console.warn('🎯 TRACK: WebAudio seek failed - missing audio resources');
+      if (!context.audioBuffer || !context.audioContext) {
+        console.warn('🎯 TRACK: WebAudio seek failed - missing audioBuffer or audioContext');
         return;
+      }
+
+      // Ensure gain node exists before seeking
+      if (!context.gainNode) {
+        console.log('🎯 TRACK: Creating missing gain node for WebAudio seek');
+        context.gainNode = context.audioContext.createGain();
+        context.gainNode.gain.value = context.volume;
       }
 
       // Check if we're currently playing
