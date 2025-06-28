@@ -361,10 +361,12 @@ export const createTrackMachine = setup({
         createAndStartBufferSource(context, self, time);
       } else {
         console.log('🎯 TRACK: WebAudio seek - track was paused, position updated only');
+        // Trigger progress update even when paused to update UI
+        self.send({ type: 'PROGRESS' });
       }
     },
 
-    seekHTML5: ({ context, event }) => {
+    seekHTML5: ({ context, event, self }) => {
       if (event.type !== 'SEEK') return;
       const time = Math.max(0, event.time);
       console.log(`🎯 TRACK: HTML5 seek to ${time.toFixed(2)}s`);
@@ -373,6 +375,8 @@ export const createTrackMachine = setup({
         context.audio.currentTime = time;
         context.currentTime = time;
         console.log(`🎯 TRACK: HTML5 seek - updated currentTime to ${time.toFixed(2)}s`);
+        // Trigger progress update to update UI
+        self.send({ type: 'PROGRESS' });
       } else {
         console.warn('🎯 TRACK: HTML5 seek failed - no audio element');
       }
@@ -604,6 +608,9 @@ export const createTrackMachine = setup({
                 actions: 'seekHTML5',
               },
             ],
+            PROGRESS: {
+              actions: ['updateProgress', 'checkPreloadNext'],
+            },
           },
         },
         playing: {

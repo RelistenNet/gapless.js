@@ -145,7 +145,8 @@ export const createQueueMachine = setup({
           const nextActor = context.trackActors[nextIdx];
           if (nextActor) {
             console.log(`🚀 QUEUE: Activating and playing track ${nextIdx}`);
-            // Directly activate and play the next track
+            // Reset track position to start and then activate and play
+            nextActor.send({ type: 'SEEK', time: 0 });
             nextActor.send({ type: 'ACTIVATE' });
             nextActor.send({ type: 'PLAY' });
           }
@@ -256,11 +257,18 @@ export const createQueueMachine = setup({
       currentTrackIdx: 0,
     }),
     setVolume: assign({
-      volume: ({ event }) => {
-        if (event.type === 'SET_VOLUME') {
-          return Math.max(0, Math.min(1, event.volume));
-        }
-        return 1;
+      volume: ({ context, event }) => {
+        if (event.type !== 'SET_VOLUME') return context.volume;
+
+        const newVolume = Math.max(0, Math.min(1, event.volume));
+        console.log(`🔊 QUEUE: Setting volume to ${(newVolume * 100).toFixed(0)}%`);
+
+        // Send volume update to all track actors
+        context.trackActors.forEach((trackActor) => {
+          trackActor.send({ type: 'SET_VOLUME', volume: newVolume });
+        });
+
+        return newVolume;
       },
     }),
     spawnInitialTracks: assign({
@@ -459,24 +467,26 @@ export const createQueueMachine = setup({
       if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
         const currentTrackMeta = context.trackMetadata?.[context.currentTrackIdx];
         const defaultTitle = `Track ${context.currentTrackIdx + 1}`;
-        
+
         navigator.mediaSession.metadata = new MediaMetadata({
           title: currentTrackMeta?.title || defaultTitle,
           artist: currentTrackMeta?.artist || 'Unknown Artist',
           album: currentTrackMeta?.album || 'Gapless Playlist',
-          artwork: currentTrackMeta?.artwork ? [
-            { src: currentTrackMeta.artwork, sizes: '96x96', type: 'image/png' },
-            { src: currentTrackMeta.artwork, sizes: '128x128', type: 'image/png' },
-            { src: currentTrackMeta.artwork, sizes: '192x192', type: 'image/png' },
-            { src: currentTrackMeta.artwork, sizes: '256x256', type: 'image/png' },
-            { src: currentTrackMeta.artwork, sizes: '384x384', type: 'image/png' },
-            { src: currentTrackMeta.artwork, sizes: '512x512', type: 'image/png' },
-          ] : []
+          artwork: currentTrackMeta?.artwork
+            ? [
+                { src: currentTrackMeta.artwork, sizes: '96x96', type: 'image/png' },
+                { src: currentTrackMeta.artwork, sizes: '128x128', type: 'image/png' },
+                { src: currentTrackMeta.artwork, sizes: '192x192', type: 'image/png' },
+                { src: currentTrackMeta.artwork, sizes: '256x256', type: 'image/png' },
+                { src: currentTrackMeta.artwork, sizes: '384x384', type: 'image/png' },
+                { src: currentTrackMeta.artwork, sizes: '512x512', type: 'image/png' },
+              ]
+            : [],
         });
 
         console.log('📱 DEVICE: Updated MediaSession metadata', {
           title: currentTrackMeta?.title || defaultTitle,
-          artist: currentTrackMeta?.artist || 'Unknown Artist'
+          artist: currentTrackMeta?.artist || 'Unknown Artist',
         });
       }
     },
@@ -484,11 +494,15 @@ export const createQueueMachine = setup({
     updateMediaSessionPlaybackState: ({ context }) => {
       if (typeof window !== 'undefined' && 'mediaSession' in navigator) {
         // Get current state from context or derive it
-        const isPlaying = context.trackActors.some(actor => {
+        const isPlaying = context.trackActors.some((actor) => {
           const snapshot = actor.getSnapshot();
-          return snapshot.status === 'active' && snapshot.matches && snapshot.matches({ playback: 'playing' });
+          return (
+            snapshot.status === 'active' &&
+            snapshot.matches &&
+            snapshot.matches({ playback: 'playing' })
+          );
         });
-        
+
         navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
         console.log('📱 DEVICE: Updated playback state to', navigator.mediaSession.playbackState);
       }
@@ -502,7 +516,12 @@ export const createQueueMachine = setup({
 }).createMachine({
   id: 'queue',
   initial: 'paused',
-  entry: ['spawnInitialTracks', 'loadCurrentTrack', 'setupMediaSession', 'updateMediaSessionMetadata'],
+  entry: [
+    'spawnInitialTracks',
+    'loadCurrentTrack',
+    'setupMediaSession',
+    'updateMediaSessionMetadata',
+  ],
   context: ({ input }) => ({
     tracks: input?.tracks || [],
     currentTrackIdx: 0,
