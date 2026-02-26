@@ -1,0 +1,56 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: #111; color: #eee; padding: 24px; line-height: 1.5; }
+h1 { font-size: 1.2rem; font-weight: 600; margin-bottom: 4px; }
+p.sub { font-size: 0.8rem; color: #888; margin-bottom: 20px; }
+
+section { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+section h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #666; margin-bottom: 12px; }
+
+.track-title { font-size: 1rem; font-weight: 600; }
+.track-time  { font-size: 0.8rem; color: #888; margin-top: 2px; }
+
+.progress-wrap { margin: 12px 0; cursor: pointer; }
+.progress-bg { height: 4px; background: #333; border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; width: 0%; background: #3b82f6; border-radius: 2px; transition: width 0.1s linear; }
+
+.controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+button {
+  background: #2a2a2a; border: 1px solid #3a3a3a; color: #eee;
+  padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+}
+button:hover { background: #333; }
+button.primary { background: #3b82f6; border-color: #3b82f6; }
+button.primary:hover { background: #2563eb; }
+label { font-size: 0.8rem; color: #aaa; }
+input[type=range] { width: 120px; cursor: pointer; }
+
+.playlist { list-style: none; }
+.playlist li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+}
+.playlist li:hover { background: #222; }
+.playlist li.active { background: #1e3a5f; }
+.playlist li .idx { width: 20px; text-align: right; color: #555; font-size: 0.75rem; }
+.playlist li .title { flex: 1; }
+.playlist li .dur { color: #666; font-size: 0.75rem; }
+.playlist li .badge {
+  font-size: 0.65rem; padding: 1px 5px; border-radius: 4px;
+  background: #2a2a2a; color: #888;
+}
+.playlist li .badge.web  { background: #14532d; color: #4ade80; }
+.playlist li .badge.h5   { background: #1e3a5f; color: #93c5fd; }
+.playlist li .badge.load { background: #3b2a05; color: #fbbf24; }
+
+.status { font-size: 0.75rem; font-family: monospace; color: #6b7280; display: flex; gap: 16px; flex-wrap: wrap; }
+.status span b { color: #d1d5db; }
+
+.log { font-family: monospace; font-size: 0.72rem; color: #4ade80; background: #0a0a0a; border-radius: 6px; padding: 10px; height: 160px; overflow-y: auto; }
+.log div { margin-bottom: 2px; }
+.log div.warn { color: #fbbf24; }
+.log div.err  { color: #f87171; }
+
+.tip { font-size: 0.78rem; color: #6b7280; margin-top: 8px; }
+.tip b { color: #fbbf24; }
+
+.preset-selector { display: flex; gap: 8px; margin-bottom: 16px; }

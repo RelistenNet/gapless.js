@@ -1,6 +1,6 @@
 {
   "name": "gapless.js",
-  "version": "3.0.1",
+  "version": "4.0.0-beta",
   "description": "Gapless audio playback javascript plugin",
   "main": "dist/cjs/index.cjs",
   "module": "dist/index.mjs",
@@ -26,9 +26,12 @@
   "sideEffects": false,
   "private": false,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
     "build": "tsup",
-    "types": "tsc --noEmit"
+    "dev": "pnpm --dir demo dev",
+    "types": "tsc --noEmit",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "repository": {
     "type": "git",
@@ -37,9 +40,17 @@
   "author": "Daniel Saewitz",
   "license": "MIT",
   "devDependencies": {
-    "@switz/eslint-config": "^12.3.2",
+    "@playwright/test": "^1.58.2",
+    "@switz/eslint-config": "^12.5.2",
+    "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^9.25.1",
-    "tsup": "^8.4.0",
-    "typescript": "^5.8.3"
+    "happy-dom": "^20.7.0",
+    "playwright": "^1.58.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "xstate": "^5.28.0"
   }
 }

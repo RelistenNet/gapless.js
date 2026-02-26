@@ -1,11 +1,8 @@
 {
   "compilerOptions": {
-    "lib": [
-      "ESNext",
-      "DOM"
-    ],
+    "lib": ["ESNext", "DOM"],
     "module": "ESNext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "importHelpers": false,
     "declaration": true,
     "sourceMap": false,
@@ -17,17 +14,13 @@
     "noUnusedParameters": true,
     "downlevelIteration": true,
     "skipLibCheck": true,
-    "jsx": "preserve",
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
-    "allowJs": true,
     "esModuleInterop": true,
     "types": [],
     "emitDeclarationOnly": true,
     "outDir": "dist",
     "declarationMap": true
   },
-  "include": [
-    "src/index.ts"
-  ]
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
 }

@@ -1,0 +1,573 @@
+// ---------------------------------------------------------------------------
+// Queue class integration tests
+//
+// Tests the full Queue public API using mocked audio infrastructure.
+// Verifies callbacks, state transitions, track management, and preloading.
+// ---------------------------------------------------------------------------
+
+import { describe, it, expect, vi } from 'vitest';
+import { Queue } from '../../src/Queue';
+import { MockAudioBuffer, MockAudioElement, mockFetchSuccess, mockFetchFailure } from '../setup';
+
+// Helper: inject a pre-decoded buffer into a track (bypasses fetch pipeline)
+function injectBuffer(queue: Queue, trackIndex: number, duration = 180): void {
+  const track = (queue as unknown as { _tracks: unknown[] })._tracks[trackIndex] as {
+    audioBuffer: AudioBuffer | null;
+    isBufferLoaded: boolean;
+  };
+  track.audioBuffer = new MockAudioBuffer(duration) as unknown as AudioBuffer;
+}
+
+describe('Queue construction', () => {
+  it('creates with empty tracks array', () => {
+    const q = new Queue();
+    expect(q.tracks).toHaveLength(0);
+    expect(q.currentTrackIndex).toBe(0);
+    expect(q.isPlaying).toBe(false);
+    expect(q.isPaused).toBe(false);
+  });
+
+  it('creates with initial tracks', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    expect(q.tracks).toHaveLength(3);
+  });
+
+  it('respects webAudioIsDisabled option', () => {
+    const q = new Queue({ webAudioIsDisabled: true });
+    expect(q.webAudioIsDisabled).toBe(true);
+  });
+
+  it('applies initial volume to all tracks', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    for (const t of q.tracks) {
+      expect(t.volume).toBe(1);
+    }
+  });
+});
+
+describe('Queue play/pause/toggle', () => {
+  it('play() transitions to playing state', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    q.play();
+    expect(q.isPlaying).toBe(true);
+  });
+
+  it('pause() transitions to paused state', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    q.play();
+    q.pause();
+    expect(q.isPaused).toBe(true);
+    expect(q.isPlaying).toBe(false);
+  });
+
+  it('togglePlayPause toggles between playing and paused', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    q.play();
+    expect(q.isPlaying).toBe(true);
+    q.togglePlayPause();
+    expect(q.isPaused).toBe(true);
+    q.togglePlayPause();
+    expect(q.isPlaying).toBe(true);
+  });
+
+  it('play() on empty queue does nothing', () => {
+    const q = new Queue();
+    expect(() => q.play()).not.toThrow();
+  });
+});
+
+describe('Queue navigation', () => {
+  it('next() advances currentTrackIndex', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    q.next();
+    expect(q.currentTrackIndex).toBe(1);
+  });
+
+  it('next() does not advance past last track', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    q.next(); // → 1
+    q.next(); // stays at 1 (last)
+    expect(q.currentTrackIndex).toBe(1);
+  });
+
+  it('previous() decrements currentTrackIndex', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.gotoTrack(2, true);
+    q.previous();
+    expect(q.currentTrackIndex).toBe(1);
+  });
+
+  it('previous() does not go below 0', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    q.previous();
+    expect(q.currentTrackIndex).toBe(0);
+  });
+
+  it('previous() restarts current track if currentTime > 8s', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    // Preload track 1 so it starts in webaudio state with a real currentTime
+    injectBuffer(q, 1, 180);
+    q.gotoTrack(1, true); // activates track 1 — buffer ready → plays via WebAudio
+    // Simulate being 30 seconds in by seeking
+    const tracks = (q as unknown as { _tracks: unknown[] })._tracks as Array<{ seek: (t: number) => void; currentTime: number }>;
+    tracks[1].seek(30);
+    q.previous();
+    // Should seek to 0, not change track
+    expect(q.currentTrackIndex).toBe(1);
+  });
+
+  it('gotoTrack() jumps to correct index', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.gotoTrack(2, false);
+    expect(q.currentTrackIndex).toBe(2);
+  });
+
+  it('gotoTrack() ignores out-of-range index', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    q.gotoTrack(99, false);
+    expect(q.currentTrackIndex).toBe(0);
+  });
+});
+
+describe('Queue track management', () => {
+  it('addTrack() appends a new track', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    q.addTrack('b.mp3');
+    expect(q.tracks).toHaveLength(2);
+    expect(q.tracks[1].trackUrl).toBe('b.mp3');
+  });
+
+  it('addTrack() with metadata stores metadata', () => {
+    const q = new Queue();
+    q.addTrack('a.mp3', { metadata: { title: 'Track A' } });
+    expect(q.tracks[0].metadata?.title).toBe('Track A');
+  });
+
+  it('removeTrack() removes by index', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.removeTrack(1);
+    expect(q.tracks).toHaveLength(2);
+    expect(q.tracks[1].trackUrl).toBe('c.mp3');
+  });
+
+  it('removeTrack() ignores out-of-range', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    expect(() => q.removeTrack(99)).not.toThrow();
+    expect(q.tracks).toHaveLength(1);
+  });
+});
+
+describe('Queue volume', () => {
+  it('setVolume clamps to [0, 1]', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    q.setVolume(1.5);
+    expect(q.volume).toBe(1);
+    q.setVolume(-0.5);
+    expect(q.volume).toBe(0);
+    q.setVolume(0.5);
+    expect(q.volume).toBeCloseTo(0.5);
+  });
+
+  it('setVolume propagates to all tracks', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.setVolume(0.3);
+    for (const t of q.tracks) {
+      expect(t.volume).toBeCloseTo(0.3);
+    }
+  });
+});
+
+describe('Queue callbacks', () => {
+  it('calls onPlayNextTrack when next() is called', () => {
+    const onPlayNextTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onPlayNextTrack });
+    q.play();
+    q.next();
+    expect(onPlayNextTrack).toHaveBeenCalledOnce();
+    expect(onPlayNextTrack.mock.calls[0][0].index).toBe(1);
+  });
+
+  it('calls onPlayPreviousTrack when previous() is called', () => {
+    const onPlayPreviousTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onPlayPreviousTrack });
+    q.gotoTrack(1, true);
+    q.previous();
+    expect(onPlayPreviousTrack).toHaveBeenCalledOnce();
+  });
+
+  it('calls onStartNewTrack for next()', () => {
+    const onStartNewTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onStartNewTrack });
+    q.play();
+    q.next();
+    expect(onStartNewTrack).toHaveBeenCalledOnce();
+  });
+
+  it('calls onError when audio errors', () => {
+    const onError = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3'], onError });
+    const tracks = (q as unknown as { _tracks: Array<{ audio: HTMLAudioElement }> })._tracks;
+    // Trigger the onerror handler directly
+    tracks[0].audio.onerror?.(new Event('error'));
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
+  it('calls onEnded when last track ends', () => {
+    const onEnded = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3'], onEnded });
+    q.play();
+    // Simulate the track ending
+    const tracks = (q as unknown as { _tracks: Array<{ audio: HTMLAudioElement }> })._tracks;
+    tracks[0].audio.onended?.(new Event('ended'));
+    expect(onEnded).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Queue currentTrack getter', () => {
+  it('returns undefined for empty queue', () => {
+    const q = new Queue();
+    expect(q.currentTrack).toBeUndefined();
+  });
+
+  it('returns TrackInfo for current track', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    const info = q.currentTrack;
+    expect(info).toBeDefined();
+    expect(info!.index).toBe(0);
+    expect(info!.trackUrl).toBe('a.mp3');
+  });
+});
+
+describe('Queue destroy', () => {
+  it('destroy() does not throw', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    expect(() => q.destroy()).not.toThrow();
+  });
+
+  it('tracks array is empty after destroy', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    q.destroy();
+    expect(q.tracks).toHaveLength(0);
+  });
+});
+
+describe('Queue TRACK_ENDED while paused', () => {
+  type InternalTrack = { audioBuffer: AudioBuffer | null; audio: MockAudioElement; isBufferLoaded: boolean };
+  type InternalQueue = { _tracks: InternalTrack[] };
+
+  // Helper: grab the mock audio element for a given track index
+  function audioOf(q: Queue, i: number): MockAudioElement {
+    return (q as unknown as InternalQueue)._tracks[i].audio as unknown as MockAudioElement;
+  }
+
+  it('queue stays paused when a non-last track ends while paused', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    q.pause();
+    expect(q.isPaused).toBe(true);
+
+    // Track 0 ends naturally (e.g. buffered audio drained)
+    audioOf(q, 0).simulateEnded();
+
+    expect(q.isPaused).toBe(true);
+    expect(q.isPlaying).toBe(false);
+  });
+
+  it('index advances to the next track when a track ends while paused', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    q.pause();
+
+    audioOf(q, 0).simulateEnded();
+
+    expect(q.currentTrackIndex).toBe(1);
+  });
+
+  it('onStartNewTrack is fired with the next track when ended while paused', () => {
+    const onStartNewTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onStartNewTrack });
+    q.play();
+    q.pause();
+    onStartNewTrack.mockClear(); // clear the call from play()
+
+    audioOf(q, 0).simulateEnded();
+
+    expect(onStartNewTrack).toHaveBeenCalledOnce();
+    expect(onStartNewTrack.mock.calls[0][0].index).toBe(1);
+  });
+
+  it('onEnded is called when the last track ends while paused', () => {
+    const onEnded = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3'], onEnded });
+    q.play();
+    q.pause();
+
+    audioOf(q, 0).simulateEnded();
+
+    expect(onEnded).toHaveBeenCalledOnce();
+  });
+
+  it('play() after a track ends while paused starts the advanced track', () => {
+    const onStartNewTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onStartNewTrack });
+    q.play();
+    q.pause();
+    onStartNewTrack.mockClear();
+
+    audioOf(q, 0).simulateEnded();
+    // Queue is paused at index 1; pressing play should start track 1
+    q.play();
+
+    expect(q.isPlaying).toBe(true);
+    expect(q.currentTrackIndex).toBe(1);
+    expect(audioOf(q, 1).play).toHaveBeenCalled();
+  });
+
+  it('does NOT auto-play onPlayNextTrack when ended while paused', () => {
+    const onPlayNextTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onPlayNextTrack });
+    q.play();
+    q.pause();
+    onPlayNextTrack.mockClear();
+
+    audioOf(q, 0).simulateEnded();
+
+    // onPlayNextTrack must not fire — user didn't press Next, and the queue is paused
+    expect(onPlayNextTrack).not.toHaveBeenCalled();
+  });
+});
+
+describe('Queue MediaSession pause guard', () => {
+  // Bug: Chrome fires the MediaSession 'pause' action when the HTML5 audio
+  // element pauses at end-of-track (before 'onended'). Without a guard, this
+  // called Queue.pause(), sending the queue to 'paused' before TRACK_ENDED
+  // could fire, so the next track never started automatically.
+  //
+  // happy-dom has no mediaSession, so we test the observable behavior directly:
+  // Queue.pause() called while already paused must be a safe no-op that does
+  // not corrupt state. This is what the guard prevents Chrome from doing.
+
+  type InternalTrack = { audio: MockAudioElement };
+  type InternalQueue  = { _tracks: InternalTrack[] };
+
+  it('calling pause() while already paused does not corrupt state', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    q.pause();
+    expect(q.isPaused).toBe(true);
+
+    // Simulate Chrome firing MediaSession 'pause' a second time at end-of-track
+    q.pause();
+
+    // Still paused — not broken
+    expect(q.isPaused).toBe(true);
+    expect(q.isPlaying).toBe(false);
+  });
+
+  it('TRACK_ENDED after a spurious pause still advances to next track when play() is called', () => {
+    // Sequence: playing → spurious pause (MediaSession) → track ends → play()
+    // Expected: next track starts, not the finished track
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    const internal = q as unknown as InternalQueue;
+
+    q.play();
+    // Spurious pause from MediaSession (Chrome fires this before onended)
+    q.pause();
+    expect(q.isPaused).toBe(true);
+    expect(q.currentTrackIndex).toBe(0);
+
+    // Track 0 ends naturally
+    internal._tracks[0].audio.simulateEnded();
+
+    // Queue should have advanced index to 1, stayed paused
+    expect(q.currentTrackIndex).toBe(1);
+    expect(q.isPaused).toBe(true);
+
+    // User hits Play — should start track 1, not replay track 0
+    q.play();
+    expect(q.isPlaying).toBe(true);
+    expect(q.currentTrackIndex).toBe(1);
+    expect(internal._tracks[1].audio.play).toHaveBeenCalled();
+  });
+});
+
+describe('Queue gapless transition progress', () => {
+  // Bug: when a track started via scheduleGaplessStart became active,
+  // onProgress was never called because startProgressLoop() wasn't invoked
+  // in the gapless branch of onTrackEnded.
+
+  type InternalTrack = { audio: MockAudioElement; audioBuffer: AudioBuffer | null };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+
+  it('startProgressLoop() is called on the next track after a gapless transition', () => {
+    // Track 0 plays via HTML5 (no injected buffer), track 1 has a pre-decoded
+    // buffer. When track 0's HTML5 audio ends and _scheduledIndices contains
+    // track 1, Queue.onTrackEnded must call startProgressLoop on track 1.
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+
+    // Only inject buffer for track 1 — track 0 stays on HTML5
+    injectBuffer(q, 1, 180);
+    q.play(); // track 0 plays via HTML5
+
+    const internal = q as unknown as InternalQueue;
+    // Mark track 1 as gapless-scheduled (simulates scheduleGaplessStart having run)
+    internal._scheduledIndices.add(1);
+
+    // Spy on track 1's startProgressLoop before the transition fires
+    const track1 = internal._tracks[1] as unknown as { startProgressLoop: () => void };
+    const loopSpy = vi.spyOn(track1, 'startProgressLoop');
+
+    // Track 0 ends via HTML5 — triggers the gapless branch in onTrackEnded
+    internal._tracks[0].audio.simulateEnded();
+
+    expect(loopSpy).toHaveBeenCalledOnce();
+  });
+
+  it('playbackType of gaplessly-started track is WEBAUDIO', () => {
+    // Bug: scheduleGaplessStart sent 'PLAY' (→ html5 state) not 'PLAY_WEBAUDIO'.
+    // After the fix, the track machine must be in webaudio state.
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 1, 180);
+
+    const internal = q as unknown as InternalQueue;
+    const track1 = internal._tracks[1] as unknown as { scheduleGaplessStart: (when: number) => void };
+
+    track1.scheduleGaplessStart(0); // schedule to start at ctx time 0
+
+    expect(q.tracks[1].playbackType).toBe('WEBAUDIO');
+  });
+});
+
+describe('Queue preloading', () => {
+  type InternalTrack = { audioBuffer: AudioBuffer | null; audio: HTMLAudioElement; isBufferLoaded: boolean };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+
+  it('starts preloading next track immediately when play() is called', () => {
+    const fetchSpy = mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    expect(fetchSpy).toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    expect(urls.some((u: string) => u.includes('b.mp3'))).toBe(true);
+  });
+
+  it('does not double-fetch the current (HTML5) track', () => {
+    const fetchSpy = mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    expect(urls.every((u: string) => !u.includes('a.mp3'))).toBe(true);
+  });
+
+  it('next track buffer is loading or loaded after play()', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    // BUFFER_LOADING is sent synchronously inside _startLoad, so no await needed
+    expect(['LOADING', 'LOADED']).toContain(q.tracks[1].webAudioLoadingState);
+  });
+
+  it('next track buffer is loaded after decode completes', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    const t1 = (q as unknown as InternalQueue)._tracks[1];
+    expect(q.tracks[1].webAudioLoadingState).toBe('LOADED');
+    expect(t1.isBufferLoaded).toBe(true);
+  });
+
+  it('preload marks ERROR state when fetch fails, track stays playable', async () => {
+    mockFetchFailure();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    expect(q.tracks[1].webAudioLoadingState).toBe('ERROR');
+  });
+
+  it('track 1 plays via HTML5 after BUFFER_ERROR fallback when track 0 ends', async () => {
+    mockFetchFailure();
+    const onStartNewTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onStartNewTrack });
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    tracks[0].audio.onended?.(new Event('ended'));
+    expect(onStartNewTrack).toHaveBeenCalledOnce();
+    expect(q.currentTrackIndex).toBe(1);
+  });
+
+  it('gapless scheduling fires when both buffers are ready', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 180);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    expect(tracks[0].isBufferLoaded).toBe(true);
+    expect(tracks[1].isBufferLoaded).toBe(true);
+    const scheduled = (q as unknown as InternalQueue)._scheduledIndices;
+    expect(scheduled.has(1)).toBe(true);
+  });
+
+  it('preloads at most PRELOAD_AHEAD (2) tracks beyond current', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    q.play();
+    // Let all fetch+decode promises settle
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    // Track 0: current (plays via HTML5, not buffer-preloaded)
+    // Track 1: preloaded (1 ahead)
+    expect(tracks[1].isBufferLoaded).toBe(true);
+    // Track 2: preloaded (2 ahead)
+    expect(tracks[2].isBufferLoaded).toBe(true);
+    // Track 3: NOT preloaded (beyond PRELOAD_AHEAD)
+    expect(tracks[3].isBufferLoaded).toBe(false);
+    // Track 4: NOT preloaded
+    expect(tracks[4].isBufferLoaded).toBe(false);
+  });
+
+  it('preloads next tracks after advancing via next()', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    // Advance to track 1
+    q.next();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    // Track 3 should now be preloaded (2 ahead of track 1)
+    expect(tracks[3].isBufferLoaded).toBe(true);
+    // Track 4 should still NOT be preloaded (beyond 2 ahead)
+    expect(tracks[4].isBufferLoaded).toBe(false);
+  });
+
+  it('next() on preloaded track transitions to playing state', async () => {
+    mockFetchSuccess();
+    const onStartNewTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], onStartNewTrack });
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    // Track 1 should be preloaded
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    expect(tracks[1].isBufferLoaded).toBe(true);
+    // Advance — should not freeze
+    q.next();
+    expect(q.currentTrackIndex).toBe(1);
+    expect(q.isPlaying).toBe(true);
+    expect(onStartNewTrack).toHaveBeenCalled();
+  });
+});
