@@ -288,6 +288,9 @@ export class Queue implements TrackQueueRef {
     );
     if (track.index !== snap.context.currentTrackIndex) return;
 
+    // Deactivate the finished track so its currentTime resets to 0
+    track.deactivate();
+
     this._actor.send({ type: 'TRACK_ENDED' });
     const newSnap = this._actor.getSnapshot();
     this.onDebug(

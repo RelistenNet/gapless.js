@@ -341,6 +341,71 @@ describe('Queue TRACK_ENDED while paused', () => {
   });
 });
 
+describe('Queue onTrackEnded resets finished track', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    currentTime: number;
+    webAudioStartedAt: number;
+    pausedAtTrackTime: number;
+  };
+  type InternalQueue = { _tracks: InternalTrack[] };
+
+  function audioOf(q: Queue, i: number): MockAudioElement {
+    return (q as unknown as InternalQueue)._tracks[i].audio as unknown as MockAudioElement;
+  }
+
+  it('finished track currentTime resets to 0 after ending', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+
+    // Simulate some playback on track 0
+    audioOf(q, 0).currentTime = 120;
+
+    // Track 0 ends
+    audioOf(q, 0).simulateEnded();
+
+    expect(q.currentTrackIndex).toBe(1);
+    // The finished track should be reset
+    expect(audioOf(q, 0).currentTime).toBe(0);
+  });
+
+  it('finished track machine state resets to idle after ending', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+
+    audioOf(q, 0).simulateEnded();
+
+    expect(q.tracks[0].machineState).toBe('idle');
+    expect(q.tracks[0].isPlaying).toBe(false);
+  });
+
+  it('new track starts at currentTime 0 after track transition', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+
+    audioOf(q, 0).simulateEnded();
+
+    expect(q.currentTrackIndex).toBe(1);
+    expect(audioOf(q, 1).currentTime).toBe(0);
+  });
+
+  it('finished track with WebAudio buffer resets all timing fields', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    // Track 0 ends via HTML5 (the onended handler)
+    audioOf(q, 0).simulateEnded();
+
+    expect(internal._tracks[0].webAudioStartedAt).toBe(0);
+    expect(internal._tracks[0].pausedAtTrackTime).toBe(0);
+    expect(audioOf(q, 0).currentTime).toBe(0);
+  });
+});
+
 describe('Queue MediaSession pause guard', () => {
   // Bug: Chrome fires the MediaSession 'pause' action when the HTML5 audio
   // element pauses at end-of-track (before 'onended'). Without a guard, this
