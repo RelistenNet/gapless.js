@@ -1,10 +1,11 @@
 {
   "name": "gapless.js",
-  "version": "4.0.0-beta",
+  "version": "4.0.0",
   "description": "Gapless audio playback javascript plugin",
-  "main": "dist/cjs/index.cjs",
+  "type": "module",
+  "main": "dist/index.mjs",
   "module": "dist/index.mjs",
-  "types": "dist/index.d.mts",
+  "types": "dist/index.d.ts",
   "files": [
     "dist",
     "src",
@@ -13,14 +14,8 @@
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "import": {
-        "types": "./dist/index.d.mts",
-        "default": "./dist/index.mjs"
-      },
-      "require": {
-        "types": "./dist/cjs/index.d.cts",
-        "default": "./dist/cjs/index.cjs"
-      }
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
     }
   },
   "sideEffects": false,
