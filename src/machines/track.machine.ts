@@ -155,6 +155,7 @@ export function createTrackMachine(initialContext: TrackContext) {
             actions: assign({ webAudioLoadingState: () => 'LOADING' as WebAudioLoadingState }),
           },
           BUFFER_READY: {
+            target: 'idle',
             actions: assign({
               webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
             }),

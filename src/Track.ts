@@ -277,6 +277,17 @@ export class Track {
   // Gapless scheduling (called by Queue)
   // --------------------------------------------------------------------------
 
+  cancelGaplessStart(): void {
+    if (this.scheduledStartContextTime === null) return;
+    this._stopSourceNode();
+    this._disconnectGain();
+    this.scheduledStartContextTime = null;
+    this.webAudioStartedAt = 0;
+    this.pausedAtTrackTime = 0;
+    this._stopProgressLoop();
+    this._actor.send({ type: 'DEACTIVATE' });
+  }
+
   scheduleGaplessStart(when: number): void {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
 
@@ -362,6 +373,7 @@ export class Track {
       playbackType: this.playbackType,
       webAudioLoadingState: this.webAudioLoadingState,
       metadata: this.metadata,
+      machineState: this.machineState,
     };
   }
 

@@ -3,6 +3,7 @@ import { useGapless } from './useGapless';
 import { NowPlaying } from './components/NowPlaying';
 import { Playlist } from './components/Playlist';
 import { Status } from './components/Status';
+import { MachineDebug } from './components/MachineDebug';
 import { EventLog } from './components/EventLog';
 
 function trackUrl(url: string) {
@@ -66,34 +67,45 @@ function Player({ preset }: { preset: TestPreset }) {
   const gapless = useGapless({ tracks: preset.tracks, titles: preset.titles, volume: 0.8 });
 
   return (
-    <>
-      <NowPlaying
-        state={gapless.state}
-        currentTrack={gapless.currentTrack}
-        volume={gapless.volume}
-        onToggle={gapless.toggle}
-        onPrev={gapless.prev}
-        onNext={gapless.next}
-        onSeek={gapless.seek}
-        onSeekToEnd={gapless.seekToEnd}
-        onVolumeChange={gapless.setVolume}
-      />
+    <div className="player-layout">
+      <div className="player-left">
+        <NowPlaying
+          state={gapless.state}
+          currentTrack={gapless.currentTrack}
+          volume={gapless.volume}
+          onToggle={gapless.toggle}
+          onPrev={gapless.prev}
+          onNext={gapless.next}
+          onSeek={gapless.seek}
+          onSeekToEnd={gapless.seekToEnd}
+          onVolumeChange={gapless.setVolume}
+        />
 
-      <Playlist
-        tracks={gapless.tracks}
-        currentTrack={gapless.currentTrack}
-        onSelect={gapless.gotoTrack}
-      />
+        <Playlist
+          tracks={gapless.tracks}
+          currentTrack={gapless.currentTrack}
+          onSelect={gapless.gotoTrack}
+        />
+      </div>
 
-      <Status
-        state={gapless.state}
-        currentTrack={gapless.currentTrack}
-        tracks={gapless.tracks}
-        volume={gapless.volume}
-      />
+      <div className="player-right">
+        <Status
+          state={gapless.state}
+          currentTrack={gapless.currentTrack}
+          tracks={gapless.tracks}
+          volume={gapless.volume}
+        />
 
-      <EventLog logs={gapless.logs} />
-    </>
+        <MachineDebug
+          queueSnapshot={gapless.queueSnapshot}
+          currentTrack={gapless.currentTrack}
+          tracks={gapless.tracks}
+          machineLog={gapless.machineLog}
+        />
+
+        <EventLog logs={gapless.logs} />
+      </div>
+    </div>
   );
 }
 

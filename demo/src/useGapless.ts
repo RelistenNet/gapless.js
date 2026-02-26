@@ -7,12 +7,24 @@ export interface LogEntry {
   level: 'info' | 'warn' | 'err';
 }
 
+export interface MachineLogEntry {
+  time: string;
+  msg: string;
+}
+
+export interface QueueSnapshot {
+  state: string;
+  context: { currentTrackIndex: number; trackCount: number };
+}
+
 export interface GaplessState {
   state: 'idle' | 'playing' | 'paused' | 'ended';
   currentTrack: TrackInfo | undefined;
   tracks: readonly TrackInfo[];
   logs: LogEntry[];
   volume: number;
+  queueSnapshot: QueueSnapshot;
+  machineLog: MachineLogEntry[];
 }
 
 export interface GaplessControls {
@@ -37,6 +49,11 @@ export function useGapless(options: {
   const [tracks, setTracks] = useState<readonly TrackInfo[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [volume, setVolumeState] = useState(options.volume);
+  const [queueSnapshot, setQueueSnapshot] = useState<QueueSnapshot>({
+    state: 'idle',
+    context: { currentTrackIndex: 0, trackCount: 0 },
+  });
+  const [machineLog, setMachineLog] = useState<MachineLogEntry[]>([]);
   const ctxReady = useRef(false);
   const queueRef = useRef<Queue | null>(null);
 
@@ -45,6 +62,15 @@ export function useGapless(options: {
       const entry: LogEntry = { time: new Date().toLocaleTimeString(), msg, level };
       const next = [entry, ...prev];
       if (next.length > 200) next.length = 200;
+      return next;
+    });
+  }, []);
+
+  const addMachineLog = useCallback((msg: string) => {
+    setMachineLog((prev) => {
+      const entry: MachineLogEntry = { time: new Date().toLocaleTimeString(), msg };
+      const next = [entry, ...prev];
+      if (next.length > 30) next.length = 30;
       return next;
     });
   }, []);
@@ -59,6 +85,7 @@ export function useGapless(options: {
         setCurrentTrack(info);
         setTracks(queue.tracks);
         setVolumeState(queue.volume);
+        setQueueSnapshot(queue.queueSnapshot);
         if (info.isPaused) {
           setState('paused');
         } else if (info.isPlaying) {
@@ -90,6 +117,21 @@ export function useGapless(options: {
 
       onDebug(msg) {
         addLog(`DBG: ${msg}`, 'warn');
+        // Capture machine-related messages in the compact log
+        if (
+          msg.includes('machineState') ||
+          msg.includes('Machine') ||
+          msg.includes('state=') ||
+          msg.includes('onended') ||
+          msg.includes('PLAY') ||
+          msg.includes('PAUSE') ||
+          msg.includes('BUFFER') ||
+          msg.includes('scheduleGapless') ||
+          msg.includes('deactivate') ||
+          msg.includes('preload')
+        ) {
+          addMachineLog(msg);
+        }
       },
 
       onPlayBlocked() {
@@ -162,6 +204,8 @@ export function useGapless(options: {
     tracks,
     logs,
     volume,
+    queueSnapshot,
+    machineLog,
     play,
     pause,
     toggle,

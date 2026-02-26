@@ -3,7 +3,23 @@ body { font-family: system-ui, sans-serif; background: #111; color: #eee; paddin
 h1 { font-size: 1.2rem; font-weight: 600; margin-bottom: 4px; }
 p.sub { font-size: 0.8rem; color: #888; margin-bottom: 20px; }
 
-section { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.player-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .player-layout { grid-template-columns: 1fr; }
+}
+.player-left, .player-right {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+section { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; }
 section h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #666; margin-bottom: 12px; }
 
 .track-title { font-size: 1rem; font-weight: 600; }
@@ -54,3 +70,10 @@ input[type=range] { width: 120px; cursor: pointer; }
 .tip b { color: #fbbf24; }
 
 .preset-selector { display: flex; gap: 8px; margin-bottom: 16px; }
+
+.debug-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 600px) { .debug-grid { grid-template-columns: 1fr; } }
+.debug-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: #555; margin: 8px 0 2px; }
+.debug-label:first-child { margin-top: 0; }
+.debug-pre { font-family: monospace; font-size: 0.7rem; color: #4ade80; background: #0a0a0a; border-radius: 4px; padding: 6px 8px; margin: 0; overflow: auto; max-height: 140px; white-space: pre-wrap; word-break: break-all; }
+.debug-log { max-height: 120px; color: #fbbf24; }

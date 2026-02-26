@@ -82,4 +82,6 @@ export interface TrackInfo {
   webAudioLoadingState: WebAudioLoadingState;
   /** Arbitrary metadata supplied when the track was added. */
   metadata?: TrackMetadata;
+  /** Current xstate machine state for this track (e.g. 'idle', 'html5', 'webaudio'). */
+  machineState: string;
 }

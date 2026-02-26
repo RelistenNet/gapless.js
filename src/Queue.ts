@@ -112,8 +112,9 @@ export class Queue implements TrackQueueRef {
   }
 
   pause(): void {
-    this._currentTrack?.pause();
     this._actor.send({ type: 'PAUSE' });
+    this._cancelScheduledGapless();
+    this._currentTrack?.pause();
   }
 
   togglePlayPause(): void {
@@ -130,8 +131,8 @@ export class Queue implements TrackQueueRef {
     if (nextIndex >= this._tracks.length) return;
 
     this._deactivateCurrent();
+    this._cancelAllScheduledGapless();
     this._actor.send({ type: 'NEXT' });
-    this._scheduledIndices.clear();
     this._activateCurrent(true);
 
     const cur = this._currentTrack;
@@ -152,8 +153,8 @@ export class Queue implements TrackQueueRef {
     }
 
     this._deactivateCurrent();
+    this._cancelAllScheduledGapless();
     this._actor.send({ type: 'PREVIOUS' });
-    this._scheduledIndices.clear();
     this._activateCurrent(true);
 
     const cur = this._currentTrack;
@@ -171,8 +172,8 @@ export class Queue implements TrackQueueRef {
       `gotoTrack(${index}, playImmediately=${playImmediately}) queueState=${prevSnap.value} curIdx=${prevSnap.context.currentTrackIndex}`
     );
     this._deactivateCurrent();
+    this._cancelAllScheduledGapless();
     this._actor.send({ type: 'GOTO', index, playImmediately });
-    this._scheduledIndices.clear();
     const afterSnap = this._actor.getSnapshot();
     this.onDebug(
       `gotoTrack after GOTO → queueState=${afterSnap.value} curIdx=${afterSnap.context.currentTrackIndex}`
@@ -196,6 +197,7 @@ export class Queue implements TrackQueueRef {
 
   seek(time: number): void {
     this._currentTrack?.seek(time);
+    this._cancelAndRescheduleGapless();
   }
 
   setVolume(volume: number): void {
@@ -266,6 +268,12 @@ export class Queue implements TrackQueueRef {
 
   get volume(): number {
     return this._volume;
+  }
+
+  /** Snapshot of the queue state machine (state name + context). For debugging. */
+  get queueSnapshot(): { state: string; context: { currentTrackIndex: number; trackCount: number } } {
+    const snap = this._actor.getSnapshot();
+    return { state: snap.value as string, context: snap.context };
   }
 
   // --------------------------------------------------------------------------
@@ -373,6 +381,31 @@ export class Queue implements TrackQueueRef {
       } else {
         this.onDebug(`_preloadAhead: track ${i} already loaded`);
       }
+    }
+  }
+
+  private _cancelScheduledGapless(): void {
+    const curIndex = this._actor.getSnapshot().context.currentTrackIndex;
+    const nextIndex = curIndex + 1;
+    if (nextIndex < this._tracks.length && this._scheduledIndices.has(nextIndex)) {
+      this._tracks[nextIndex].cancelGaplessStart();
+      this._scheduledIndices.delete(nextIndex);
+      this.onDebug(`_cancelScheduledGapless: cancelled track ${nextIndex}`);
+    }
+  }
+
+  private _cancelAllScheduledGapless(): void {
+    for (const idx of this._scheduledIndices) {
+      this._tracks[idx]?.cancelGaplessStart();
+    }
+    this._scheduledIndices.clear();
+  }
+
+  private _cancelAndRescheduleGapless(): void {
+    this._cancelScheduledGapless();
+    const current = this._currentTrack;
+    if (current) {
+      this._tryScheduleGapless(current);
     }
   }
 

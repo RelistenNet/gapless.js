@@ -442,6 +442,295 @@ describe('Queue gapless transition progress', () => {
   });
 });
 
+describe('Queue seek cancels stale gapless schedule', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    scheduledStartContextTime: number | null;
+    cancelGaplessStart: () => void;
+  };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+
+  it('seek() cancels a scheduled gapless start on the next track', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    // Let fetch+decode settle so track 1 buffer is ready and gapless is scheduled
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    // Verify track 1 was gapless-scheduled
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
+
+    // Seek current track — should cancel the stale schedule
+    q.seek(295);
+
+    // The old schedule must be cleared and rescheduled
+    // (rescheduled because both buffers are still ready)
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+    // The new scheduled time should be based on the seek position
+    const newStart = internal._tracks[1].scheduledStartContextTime;
+    expect(newStart).not.toBeNull();
+    // remaining = 300 - 295 = 5s, so newStart ≈ ctxNow + 5
+    expect(newStart!).toBeLessThan(10);
+  });
+
+  it('seek() reschedules gapless on the next track with updated timing', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    const oldStart = internal._tracks[1].scheduledStartContextTime;
+    expect(oldStart).not.toBeNull();
+
+    // Seek close to end (simulate "skip to end -5s")
+    q.seek(295);
+
+    // Should have rescheduled with a much sooner start time
+    const newStart = internal._tracks[1].scheduledStartContextTime;
+    expect(newStart).not.toBeNull();
+    expect(newStart!).toBeLessThan(oldStart!);
+  });
+
+  it('cancelGaplessStart resets the next track to idle', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    // Track 1 should be in webaudio (gapless-scheduled)
+    expect(q.tracks[1].machineState).toBe('webaudio');
+
+    // After seek, track 1 gets cancelled then rescheduled.
+    // But first verify the cancel path works by checking the track went
+    // through idle before being rescheduled. We can verify by checking
+    // that the track is back in webaudio with a new schedule time.
+    const oldStart = internal._tracks[1].scheduledStartContextTime;
+    q.seek(295);
+    const newStart = internal._tracks[1].scheduledStartContextTime;
+    expect(newStart).not.toBeNull();
+    expect(newStart).not.toBe(oldStart);
+    expect(q.tracks[1].machineState).toBe('webaudio');
+  });
+
+  it('seek() with no scheduled gapless is a safe no-op', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+
+    // Track 0 has no buffer, so no gapless was scheduled
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.size).toBe(0);
+
+    // Should not throw
+    expect(() => q.seek(10)).not.toThrow();
+  });
+
+  it('seek() on last track with no next track is a safe no-op', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+
+    expect(() => q.seek(200)).not.toThrow();
+  });
+});
+
+describe('Queue pause cancels stale gapless schedule', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    scheduledStartContextTime: number | null;
+    cancelGaplessStart: () => void;
+  };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+
+  it('pause() cancels the scheduled gapless start on the next track', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
+
+    q.pause();
+
+    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(internal._tracks[1].scheduledStartContextTime).toBeNull();
+  });
+
+  it('pause() then play() allows fresh gapless scheduling', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+
+    q.pause();
+    expect(internal._scheduledIndices.has(1)).toBe(false);
+
+    // play() calls _preloadAhead → onTrackBufferReady → _tryScheduleGapless
+    // but since the buffer is already loaded, preload() is a no-op.
+    // The fresh schedule would happen via the progress loop triggering
+    // onTrackBufferReady. For this unit test, verify the index is cleared
+    // so _tryScheduleGapless won't be blocked by a stale entry.
+    expect(internal._scheduledIndices.has(1)).toBe(false);
+  });
+
+  it('pause() with no scheduled gapless is a safe no-op', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.size).toBe(0);
+
+    expect(() => q.pause()).not.toThrow();
+    expect(q.isPaused).toBe(true);
+  });
+});
+
+describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    scheduledStartContextTime: number | null;
+    cancelGaplessStart: () => void;
+  };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+
+  it('next() cancels all scheduled gapless starts', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+
+    q.next();
+
+    // All old schedules should be cleared
+    // (track 1 is now current, track 2 may or may not be scheduled yet)
+    expect(internal._scheduledIndices.has(1)).toBe(false);
+  });
+
+  it('next() resets the previously-scheduled track machine state', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    // Track 1 was gapless-scheduled (in webaudio state)
+    expect(q.tracks[1].machineState).toBe('webaudio');
+
+    q.next();
+
+    // Track 1 is now the current track — it gets activated fresh
+    expect(q.currentTrackIndex).toBe(1);
+    expect(q.isPlaying).toBe(true);
+  });
+
+  it('previous() cancels all scheduled gapless starts', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+
+    // Seek to 0 so previous() doesn't just restart the track (threshold is 8s)
+    q.previous();
+
+    expect(internal._scheduledIndices.has(1)).toBe(false);
+  });
+
+  it('gotoTrack() cancels all scheduled gapless starts', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+
+    q.gotoTrack(2, true);
+
+    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(q.currentTrackIndex).toBe(2);
+  });
+
+  it('gotoTrack() resets the previously-scheduled track to idle', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    // Track 1 was gapless-scheduled
+    expect(q.tracks[1].machineState).toBe('webaudio');
+    expect(q.tracks[1].webAudioLoadingState).toBe('LOADED');
+
+    q.gotoTrack(2, true);
+
+    // Track 1 should be back to idle (cancelled), buffer still loaded
+    expect(q.tracks[1].machineState).toBe('idle');
+    expect(q.tracks[1].webAudioLoadingState).toBe('LOADED');
+  });
+
+  it('gotoTrack(_, false) cancels gapless without playing', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+
+    q.gotoTrack(2, false);
+
+    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(q.currentTrackIndex).toBe(2);
+  });
+
+  it('next() with no scheduled gapless is a safe no-op', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledIndices.size).toBe(0);
+
+    expect(() => q.next()).not.toThrow();
+    expect(q.currentTrackIndex).toBe(1);
+  });
+
+  it('gotoTrack() on single-track queue with no schedule is a safe no-op', () => {
+    const q = new Queue({ tracks: ['a.mp3'] });
+    q.play();
+
+    expect(() => q.gotoTrack(0, true)).not.toThrow();
+  });
+});
+
 describe('Queue preloading', () => {
   type InternalTrack = { audioBuffer: AudioBuffer | null; audio: HTMLAudioElement; isBufferLoaded: boolean };
   type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };

@@ -118,10 +118,10 @@ describe('TrackMachine', () => {
   });
 
   describe('loading state', () => {
-    it('BUFFER_READY in loading stays in loading and marks LOADED', () => {
+    it('BUFFER_READY in loading transitions to idle and marks LOADED', () => {
       const a = actorAt(makeCtx(), 'loading');
       a.send({ type: 'BUFFER_READY' });
-      expect(a.getSnapshot().value).toBe('loading');
+      expect(a.getSnapshot().value).toBe('idle');
       expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
     });
 
@@ -139,10 +139,24 @@ describe('TrackMachine', () => {
       expect(a.getSnapshot().context.isPlaying).toBe(true);
     });
 
+    // Regression: BUFFER_READY in loading must transition to idle (not stay in loading)
+    it('BUFFER_READY in loading transitions to idle so track is not stuck', () => {
+      const a = actorAt(makeCtx(), 'loading');
+      a.send({ type: 'BUFFER_READY' });
+      // Must be idle, not loading — a preloaded track with a decoded buffer
+      // should be idle (ready to play), not stuck in the loading state
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      // Can still transition to webaudio when activated
+      a.send({ type: 'PLAY_WEBAUDIO' });
+      expect(a.getSnapshot().value).toBe('webaudio');
+      expect(a.getSnapshot().context.isPlaying).toBe(true);
+    });
+
     it('BUFFER_READY in loading does not set isPlaying or playbackType', () => {
       const a = actorAt(makeCtx(), 'loading');
       a.send({ type: 'BUFFER_READY' });
-      expect(a.getSnapshot().value).toBe('loading');
+      expect(a.getSnapshot().value).toBe('idle');
       expect(a.getSnapshot().context.playbackType).toBe('HTML5');
       expect(a.getSnapshot().context.isPlaying).toBe(false);
     });
@@ -175,7 +189,7 @@ describe('TrackMachine', () => {
       const a = actorAt(makeCtx());
       a.send({ type: 'PRELOAD' });
       a.send({ type: 'BUFFER_READY' });
-      expect(a.getSnapshot().value).toBe('loading');
+      expect(a.getSnapshot().value).toBe('idle');
       expect(a.getSnapshot().context.isPlaying).toBe(false);
       a.send({ type: 'PLAY_WEBAUDIO' });
       expect(a.getSnapshot().value).toBe('webaudio');
