@@ -5,8 +5,9 @@ import { Playlist } from './components/Playlist';
 import { Status } from './components/Status';
 import { EventLog } from './components/EventLog';
 
-function proxyUrl(url: string) {
-  return `/proxy?url=${encodeURIComponent(url)}`;
+function trackUrl(url: string) {
+  if (import.meta.env.DEV) return `/proxy?url=${encodeURIComponent(url)}`;
+  return url;
 }
 
 const BASE =
@@ -24,8 +25,8 @@ const PRESETS: TestPreset[] = [
     label: 'Scarlet > Fire (2 tracks)',
     description: 'Grateful Dead — Cornell 1977-05-08 — Set 2 excerpt — Scarlet Begonias > Fire on the Mountain',
     tracks: [
-      proxyUrl(BASE + 'gd77-05-08.s2t02.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s2t03.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s2t02.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s2t03.mp3'),
     ],
     titles: ['Scarlet Begonias', 'Fire on the Mountain'],
   },
@@ -33,17 +34,17 @@ const PRESETS: TestPreset[] = [
     label: 'Full Set 1 (11 tracks)',
     description: 'Grateful Dead — Cornell 1977-05-08 — Complete Set 1 — New Minglewood Blues through Row Jimmy',
     tracks: [
-      proxyUrl(BASE + 'gd77-05-08.s1t01.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t02.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t03.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t04.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t05.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t06.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t07.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t08.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t09.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t10.mp3'),
-      proxyUrl(BASE + 'gd77-05-08.s1t11.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t01.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t02.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t03.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t04.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t05.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t06.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t07.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t08.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t09.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t10.mp3'),
+      trackUrl(BASE + 'gd77-05-08.s1t11.mp3'),
     ],
     titles: [
       'New Minglewood Blues',

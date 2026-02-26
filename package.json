@@ -28,6 +28,7 @@
   "scripts": {
     "test": "vitest run",
     "build": "tsup",
+    "build:demo": "pnpm --dir demo build",
     "dev": "pnpm --dir demo dev",
     "types": "tsc --noEmit",
     "test:watch": "vitest",
