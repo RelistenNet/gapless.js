@@ -569,7 +569,7 @@ describe('Queue pause cancels stale gapless schedule', () => {
     expect(internal._tracks[1].scheduledStartContextTime).toBeNull();
   });
 
-  it('pause() then play() allows fresh gapless scheduling', async () => {
+  it('pause() then play() reschedules gapless for the next track', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 300);
@@ -578,16 +578,16 @@ describe('Queue pause cancels stale gapless schedule', () => {
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledIndices.has(1)).toBe(true);
+    const originalStart = internal._tracks[1].scheduledStartContextTime;
 
     q.pause();
     expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(internal._tracks[1].scheduledStartContextTime).toBeNull();
 
-    // play() calls _preloadAhead → onTrackBufferReady → _tryScheduleGapless
-    // but since the buffer is already loaded, preload() is a no-op.
-    // The fresh schedule would happen via the progress loop triggering
-    // onTrackBufferReady. For this unit test, verify the index is cleared
-    // so _tryScheduleGapless won't be blocked by a stale entry.
-    expect(internal._scheduledIndices.has(1)).toBe(false);
+    // play() must reschedule gapless with a fresh timing
+    q.play();
+    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
   });
 
   it('pause() with no scheduled gapless is a safe no-op', () => {

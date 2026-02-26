@@ -109,6 +109,7 @@ export class Queue implements TrackQueueRef {
     this._actor.send({ type: 'PLAY' });
     updateMediaSessionMetadata(ct.metadata);
     this._preloadAhead(ct.index);
+    this._tryScheduleGapless(ct);
   }
 
   pause(): void {
