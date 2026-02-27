@@ -1,4 +1,4 @@
-import type { TrackInfo } from 'gapless.js';
+import type { TrackInfo } from 'gapless';
 
 interface StatusProps {
   state: 'idle' | 'playing' | 'paused' | 'ended';

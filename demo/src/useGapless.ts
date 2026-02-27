@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Queue, type TrackInfo } from 'gapless.js';
+import { Queue, type TrackInfo } from 'gapless';
 
 export interface LogEntry {
   time: string;

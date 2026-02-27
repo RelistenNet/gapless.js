@@ -1,4 +1,4 @@
-import type { TrackInfo } from 'gapless.js';
+import type { TrackInfo } from 'gapless';
 import { useCallback, useRef } from 'react';
 
 function fmt(s: number | undefined) {

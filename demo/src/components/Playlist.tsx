@@ -1,4 +1,4 @@
-import type { TrackInfo } from 'gapless.js';
+import type { TrackInfo } from 'gapless';
 
 function fmt(s: number | undefined) {
   if (!s || isNaN(s)) return '0:00';

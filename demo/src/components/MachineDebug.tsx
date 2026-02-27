@@ -1,4 +1,4 @@
-import type { TrackInfo } from 'gapless.js';
+import type { TrackInfo } from 'gapless';
 import type { QueueSnapshot, MachineLogEntry } from '../useGapless';
 
 export function MachineDebug({

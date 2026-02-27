@@ -47,9 +47,9 @@ gapless.js is a browser audio playback library that achieves sample-accurate gap
 ### Importing
 
 ```typescript
-import { Queue } from 'gapless.js';
+import { Queue } from 'gapless';
 // or
-import Queue from 'gapless.js';
+import Queue from 'gapless';
 ```
 
 Exported types:
@@ -62,7 +62,7 @@ import type {
   TrackMetadata,
   PlaybackType,       // 'HTML5' | 'WEBAUDIO'
   WebAudioLoadingState // 'NONE' | 'LOADING' | 'LOADED' | 'ERROR'
-} from 'gapless.js';
+} from 'gapless';
 ```
 
 ### Constructor
@@ -156,8 +156,8 @@ gapless.js has no React dependency. Wrap it in a custom hook:
 
 ```typescript
 import { useRef, useState, useEffect, useCallback } from 'react';
-import { Queue } from 'gapless.js';
-import type { TrackInfo } from 'gapless.js';
+import { Queue } from 'gapless';
+import type { TrackInfo } from 'gapless';
 
 export function useGapless(tracks: string[], metadata: { title: string }[]) {
   const queueRef = useRef<Queue | null>(null);
