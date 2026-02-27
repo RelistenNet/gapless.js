@@ -11,20 +11,6 @@ import { vi, beforeEach } from 'vitest';
 import { _resetAudioContext, _setAudioContext } from '../src/utils/audioContext';
 
 // ---------------------------------------------------------------------------
-// Suppress xstate v5 false-positive warnings
-//
-// xstate 5.28 warns "Custom actions should not call assign() directly" when
-// spawn() creates a child actor inside an assign action — the child's context
-// initialiser internally calls assign(), tripping the module-level guard.
-// This is a known xstate issue, not a bug in our code.
-// ---------------------------------------------------------------------------
-const _origWarn = console.warn;
-console.warn = (...args: unknown[]) => {
-  if (typeof args[0] === 'string' && args[0].includes('Custom actions should not call')) return;
-  _origWarn(...args);
-};
-
-// ---------------------------------------------------------------------------
 // Controllable AudioContext clock
 // ---------------------------------------------------------------------------
 let _contextTime = 0;

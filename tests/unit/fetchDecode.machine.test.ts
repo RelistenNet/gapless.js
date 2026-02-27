@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
-import { createActor, setup, assign, fromPromise, type AnyActorRef } from 'xstate';
+import { createActor, setup, assign, spawnChild, fromPromise, type AnyActorRef } from 'xstate';
 import { fetchDecodeMachine } from '../../src/machines/fetchDecode.machine';
 import type { FetchDecodeContext } from '../../src/machines/fetchDecode.machine';
 
@@ -52,16 +52,13 @@ function createParentActor(opts: {
         on: {
           SPAWN: {
             target: 'running',
-            actions: assign({
-              childRef: ({ spawn }) =>
-                spawn('fetchDecode', {
-                  id: 'fetchDecode',
-                  input: {
-                    trackUrl: opts.input?.trackUrl ?? 'https://example.com/track.mp3',
-                    resolvedUrl: opts.input?.resolvedUrl ?? 'https://example.com/track.mp3',
-                    skipHEAD: opts.input?.skipHEAD ?? false,
-                  },
-                }),
+            actions: spawnChild('fetchDecode', {
+              id: 'fetchDecode',
+              input: {
+                trackUrl: opts.input?.trackUrl ?? 'https://example.com/track.mp3',
+                resolvedUrl: opts.input?.resolvedUrl ?? 'https://example.com/track.mp3',
+                skipHEAD: opts.input?.skipHEAD ?? false,
+              },
             }),
           },
         },

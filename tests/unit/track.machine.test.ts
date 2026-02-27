@@ -17,7 +17,7 @@ function makeCtx(overrides: Partial<TrackContext> = {}): TrackContext {
     isPlaying: false,
     scheduledStartContextTime: null,
     notifiedLookahead: false,
-    fetchDecodeRef: null,
+    fetchStarted: false,
     ...overrides,
   };
 }
@@ -381,35 +381,34 @@ describe('TrackMachine', () => {
   // START_FETCH event
   // ---------------------------------------------------------------------------
   describe('START_FETCH event', () => {
-    it('sets webAudioLoadingState to LOADING and spawns fetchDecodeRef', () => {
+    it('sets webAudioLoadingState to LOADING and marks fetchStarted', () => {
       const a = actorAt(makeCtx());
       a.send({ type: 'START_FETCH' });
       const snap = a.getSnapshot();
       expect(snap.context.webAudioLoadingState).toBe('LOADING');
-      expect(snap.context.fetchDecodeRef).not.toBeNull();
+      expect(snap.context.fetchStarted).toBe(true);
     });
 
     it('guard prevents double-spawn when already LOADING', () => {
       const a = actorAt(makeCtx());
       a.send({ type: 'START_FETCH' });
-      const ref1 = a.getSnapshot().context.fetchDecodeRef;
-      // Send START_FETCH again — guard should prevent it
+      expect(a.getSnapshot().context.fetchStarted).toBe(true);
+      // Send START_FETCH again — guard should prevent it (state unchanged)
       a.send({ type: 'START_FETCH' });
-      const ref2 = a.getSnapshot().context.fetchDecodeRef;
-      expect(ref1).toBe(ref2);
+      expect(a.getSnapshot().context.fetchStarted).toBe(true);
     });
 
     it('guard prevents spawn when webAudioLoadingState is not NONE', () => {
       const a = actorAt(makeCtx({ webAudioLoadingState: 'LOADED' }));
       a.send({ type: 'START_FETCH' });
-      expect(a.getSnapshot().context.fetchDecodeRef).toBeNull();
+      expect(a.getSnapshot().context.fetchStarted).toBe(false);
     });
 
     it('START_FETCH works from html5 state', () => {
       const a = actorAt(makeCtx(), 'html5');
       a.send({ type: 'START_FETCH' });
       expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADING');
-      expect(a.getSnapshot().context.fetchDecodeRef).not.toBeNull();
+      expect(a.getSnapshot().context.fetchStarted).toBe(true);
       // Still in html5
       expect(a.getSnapshot().value).toBe('html5');
     });
@@ -418,7 +417,7 @@ describe('TrackMachine', () => {
       const a = actorAt(makeCtx(), 'loading');
       a.send({ type: 'START_FETCH' });
       expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADING');
-      expect(a.getSnapshot().context.fetchDecodeRef).not.toBeNull();
+      expect(a.getSnapshot().context.fetchStarted).toBe(true);
       // Still in loading
       expect(a.getSnapshot().value).toBe('loading');
     });

@@ -110,7 +110,7 @@ export class Track {
       isPlaying: false,
       scheduledStartContextTime: null,
       notifiedLookahead: false,
-      fetchDecodeRef: null,
+      fetchStarted: false,
     };
     const machine = createTrackMachine(initialContext).provide({
       guards: {

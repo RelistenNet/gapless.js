@@ -40,14 +40,18 @@ export const fetchDecodeMachine = setup({
 }).createMachine({
   id: 'fetchDecode',
   initial: 'resolvingUrl',
-  // Note: xstate v5 internally calls assign() when initialising a child
-  // actor with a context function, which produces a false-positive
-  // "Custom actions should not call assign()" warning when this machine
-  // is spawned from a parent. This is harmless and cannot be avoided.
-  context: ({ input }) => ({
-    trackUrl: input.trackUrl,
-    resolvedUrl: input.resolvedUrl,
-    skipHEAD: input.skipHEAD,
+  context: {
+    trackUrl: '',
+    resolvedUrl: '',
+    skipHEAD: false,
+  },
+  entry: assign(({ event }) => {
+    const { input } = event as { type: string; input: FetchDecodeContext };
+    return {
+      trackUrl: input.trackUrl,
+      resolvedUrl: input.resolvedUrl,
+      skipHEAD: input.skipHEAD,
+    };
   }),
 
   states: {

@@ -23,7 +23,7 @@
 //   #4: Removed dead error state (webAudioLoadingState: 'ERROR' is sufficient)
 // ---------------------------------------------------------------------------
 
-import { setup, assign, type AnyActorRef } from 'xstate';
+import { setup, assign, spawnChild } from 'xstate';
 import { fetchDecodeMachine } from './fetchDecode.machine';
 import type { WebAudioLoadingState, PlaybackType } from '../types';
 
@@ -38,7 +38,7 @@ export interface TrackContext {
   isPlaying: boolean;
   scheduledStartContextTime: number | null;
   notifiedLookahead: boolean;
-  fetchDecodeRef: AnyActorRef | null;
+  fetchStarted: boolean;
 }
 
 // ---- Events ----------------------------------------------------------------
@@ -76,7 +76,7 @@ export function createTrackMachine(initialContext: TrackContext) {
     },
     guards: {
       canPlayWebAudio: () => false,
-      canStartFetch: ({ context }) => context.webAudioLoadingState === 'NONE' && context.fetchDecodeRef === null,
+      canStartFetch: ({ context }) => context.webAudioLoadingState === 'NONE' && !context.fetchStarted,
     },
     actions: {
       playHtml5: () => {},
@@ -135,18 +135,20 @@ export function createTrackMachine(initialContext: TrackContext) {
     on: {
       START_FETCH: {
         guard: 'canStartFetch',
-        actions: assign({
-          webAudioLoadingState: () => 'LOADING' as WebAudioLoadingState,
-          fetchDecodeRef: ({ context, spawn }) =>
-            spawn('fetchDecode', {
-              id: 'fetchDecode',
-              input: {
-                trackUrl: context.trackUrl,
-                resolvedUrl: context.resolvedUrl,
-                skipHEAD: context.skipHEAD,
-              },
+        actions: [
+          assign({
+            webAudioLoadingState: () => 'LOADING' as WebAudioLoadingState,
+            fetchStarted: () => true,
+          }),
+          spawnChild('fetchDecode', {
+            id: 'fetchDecode',
+            input: ({ context }) => ({
+              trackUrl: context.trackUrl,
+              resolvedUrl: context.resolvedUrl,
+              skipHEAD: context.skipHEAD,
             }),
-        }),
+          }),
+        ],
       },
     },
 
