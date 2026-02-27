@@ -227,9 +227,10 @@ export class Track {
 
   activate(): void {
     const state = this._actor.getSnapshot().value;
-    // If the track was in webaudio state (e.g. from gapless scheduling or
-    // preload BUFFER_READY), reset it so play() can start from a clean state.
-    if (state === 'webaudio') {
+    // If the track was in webaudio or loading state (e.g. from gapless scheduling,
+    // preload BUFFER_READY, or stuck in loading), reset it so play() can start
+    // from a clean state.
+    if (state === 'webaudio' || state === 'loading') {
       this._stopSourceNode();
       this._disconnectGain();
       this.scheduledStartContextTime = null;

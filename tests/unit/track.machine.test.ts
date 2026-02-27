@@ -55,6 +55,37 @@ describe('TrackMachine', () => {
       a.send({ type: 'URL_RESOLVED', url: 'https://cdn.example.com/track.mp3' });
       expect(a.getSnapshot().context.resolvedUrl).toBe('https://cdn.example.com/track.mp3');
     });
+
+    it('BUFFER_READY in idle updates webAudioLoadingState to LOADED', () => {
+      const a = actorAt(makeCtx());
+      a.send({ type: 'BUFFER_READY' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+    });
+
+    it('BUFFER_ERROR in idle updates webAudioLoadingState to ERROR', () => {
+      const a = actorAt(makeCtx());
+      a.send({ type: 'BUFFER_ERROR' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('ERROR');
+    });
+
+    it('full cycle: html5 → BUFFER_READY → DEACTIVATE → idle → PLAY_WEBAUDIO → webaudio', () => {
+      const a = actorAt(makeCtx(), 'html5');
+      // Buffer loads while playing HTML5
+      a.send({ type: 'BUFFER_READY' });
+      expect(a.getSnapshot().value).toBe('html5');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      // Track gets deactivated (e.g. user skips away)
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      // Track is re-activated and plays via Web Audio
+      a.send({ type: 'PLAY_WEBAUDIO' });
+      expect(a.getSnapshot().value).toBe('webaudio');
+      expect(a.getSnapshot().context.isPlaying).toBe(true);
+      expect(a.getSnapshot().context.playbackType).toBe('WEBAUDIO');
+    });
   });
 
   describe('html5 state', () => {
@@ -101,11 +132,20 @@ describe('TrackMachine', () => {
       expect(a.getSnapshot().context.pausedAtTrackTime).toBe(45.5);
     });
 
-    it('transitions html5 → loading on DEACTIVATE', () => {
+    it('transitions html5 → idle on DEACTIVATE', () => {
       const a = actorAt(makeCtx(), 'html5');
       a.send({ type: 'DEACTIVATE' });
-      expect(a.getSnapshot().value).toBe('loading');
+      expect(a.getSnapshot().value).toBe('idle');
       expect(a.getSnapshot().context.isPlaying).toBe(false);
+    });
+
+    it('DEACTIVATE from html5 preserves webAudioLoadingState (LOADED stays LOADED)', () => {
+      const a = actorAt(makeCtx(), 'html5');
+      a.send({ type: 'BUFFER_READY' });
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
     });
 
     it('transitions html5 → webaudio on PLAY_WEBAUDIO', () => {
@@ -159,6 +199,22 @@ describe('TrackMachine', () => {
       expect(a.getSnapshot().value).toBe('idle');
       expect(a.getSnapshot().context.playbackType).toBe('HTML5');
       expect(a.getSnapshot().context.isPlaying).toBe(false);
+    });
+
+    it('transitions loading → idle on DEACTIVATE', () => {
+      const a = actorAt(makeCtx(), 'loading');
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.isPlaying).toBe(false);
+    });
+
+    it('DEACTIVATE from loading preserves in-progress webAudioLoadingState', () => {
+      const a = actorAt(makeCtx(), 'loading');
+      a.send({ type: 'BUFFER_LOADING' });
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADING');
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADING');
     });
   });
 
@@ -217,6 +273,106 @@ describe('TrackMachine', () => {
       a.send({ type: 'DEACTIVATE' });
       expect(a.getSnapshot().value).toBe('idle');
       expect(a.getSnapshot().context.isPlaying).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Invariant: "Web Audio always wins eventually"
+  //
+  // Once a track's buffer decodes (BUFFER_READY), webAudioLoadingState must
+  // reach 'LOADED' and stay there through any deactivate/reactivate cycle, so
+  // the next play() can use Web Audio. We do NOT switch mid-stream — a track
+  // playing HTML5 stays on HTML5 until the next play().
+  // ---------------------------------------------------------------------------
+  describe('invariant: Web Audio always wins eventually', () => {
+    it('buffer ready while in html5 → deactivate → re-play uses Web Audio', () => {
+      const a = actorAt(makeCtx(), 'html5');
+      a.send({ type: 'BUFFER_READY' });
+      // Stays in html5 (no mid-stream switch)
+      expect(a.getSnapshot().value).toBe('html5');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      // Deactivate (user skips away)
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().value).toBe('idle');
+      // webAudioLoadingState survived the deactivate
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      // Next play uses Web Audio
+      a.send({ type: 'PLAY_WEBAUDIO' });
+      expect(a.getSnapshot().value).toBe('webaudio');
+    });
+
+    it('buffer ready while in idle (deactivated before decode finished)', () => {
+      const a = actorAt(makeCtx(), 'html5');
+      a.send({ type: 'BUFFER_LOADING' });
+      // Deactivate while still decoding
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADING');
+      // Decode finishes — idle handles BUFFER_READY
+      a.send({ type: 'BUFFER_READY' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      // Next play uses Web Audio
+      a.send({ type: 'PLAY_WEBAUDIO' });
+      expect(a.getSnapshot().value).toBe('webaudio');
+    });
+
+    it('buffer ready while in loading (preloaded, not yet played)', () => {
+      const a = actorAt(makeCtx(), 'loading');
+      a.send({ type: 'BUFFER_READY' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      a.send({ type: 'PLAY_WEBAUDIO' });
+      expect(a.getSnapshot().value).toBe('webaudio');
+    });
+
+    it('buffer ready after loading → deactivate → idle', () => {
+      const a = actorAt(makeCtx(), 'loading');
+      a.send({ type: 'BUFFER_LOADING' });
+      // Deactivate from loading (e.g. activate() reset)
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().value).toBe('idle');
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADING');
+      // Decode finishes
+      a.send({ type: 'BUFFER_READY' });
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      // Next play uses Web Audio
+      a.send({ type: 'PLAY_WEBAUDIO' });
+      expect(a.getSnapshot().value).toBe('webaudio');
+    });
+
+    it('DEACTIVATE from any playing state always lands in idle', () => {
+      // From html5
+      const a1 = actorAt(makeCtx(), 'html5');
+      a1.send({ type: 'DEACTIVATE' });
+      expect(a1.getSnapshot().value).toBe('idle');
+
+      // From webaudio
+      const a2 = actorAt(makeCtx(), 'webaudio');
+      a2.send({ type: 'DEACTIVATE' });
+      expect(a2.getSnapshot().value).toBe('idle');
+
+      // From loading
+      const a3 = actorAt(makeCtx(), 'loading');
+      a3.send({ type: 'DEACTIVATE' });
+      expect(a3.getSnapshot().value).toBe('idle');
+    });
+
+    it('webAudioLoadingState is never lost through deactivate cycles', () => {
+      const a = actorAt(makeCtx(), 'html5');
+      a.send({ type: 'BUFFER_READY' });
+      // Deactivate and reactivate multiple times
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      a.send({ type: 'PLAY' }); // play as html5 again
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      a.send({ type: 'PLAY' });
+      a.send({ type: 'DEACTIVATE' });
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      // Still available for Web Audio
+      a.send({ type: 'PLAY_WEBAUDIO' });
+      expect(a.getSnapshot().value).toBe('webaudio');
     });
   });
 });

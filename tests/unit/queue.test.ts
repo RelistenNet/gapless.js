@@ -796,6 +796,55 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
   });
 });
 
+describe('Queue HTML5 fallback and background loading', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    machineState: string;
+    webAudioLoadingState: string;
+  };
+  type InternalQueue = { _tracks: InternalTrack[] };
+
+  it('activate() resets a track in loading state to idle', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    // Play track 0, which preloads track 1 into loading state
+    q.play();
+    // Track 1 should be in loading state from preload
+    expect(q.tracks[1].machineState).toBe('loading');
+    // Now goto track 1 — activate() should reset it from loading to idle before playing
+    q.gotoTrack(1, true);
+    // Track 1 should be playing (html5 or webaudio), not stuck in loading
+    expect(q.tracks[1].machineState).not.toBe('loading');
+    expect(q.isPlaying).toBe(true);
+  });
+
+  it('deactivate() from html5 puts track in idle (not loading)', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    expect(q.tracks[0].machineState).toBe('html5');
+    // Deactivate track 0 by advancing to track 1
+    q.next();
+    expect(q.tracks[0].machineState).toBe('idle');
+  });
+
+  it('next() to unloaded track plays HTML5, buffer loads in background, re-activation uses Web Audio', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    // Skip to track 1 before its buffer is ready — should fall back to HTML5
+    q.next();
+    expect(q.currentTrackIndex).toBe(1);
+    expect(q.isPlaying).toBe(true);
+    // Let the buffer decode complete
+    await new Promise(r => setTimeout(r, 0));
+    // Track 1's buffer should now be loaded
+    const internal = q as unknown as InternalQueue;
+    expect(internal._tracks[1].isBufferLoaded).toBe(true);
+    expect(q.tracks[1].webAudioLoadingState).toBe('LOADED');
+  });
+});
+
 describe('Queue preloading', () => {
   type InternalTrack = { audioBuffer: AudioBuffer | null; audio: HTMLAudioElement; isBufferLoaded: boolean };
   type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };

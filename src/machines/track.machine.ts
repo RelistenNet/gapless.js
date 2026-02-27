@@ -7,6 +7,16 @@
 //   loading     Track is preloaded (not yet playing). Decode in progress.
 //   webaudio    AudioBufferSourceNode is the active output.
 //
+// Design invariant — "Web Audio always wins eventually":
+//   When a track's buffer finishes decoding (BUFFER_READY), webAudioLoadingState
+//   is set to 'LOADED' regardless of what state the machine is in (html5, loading,
+//   or idle). We intentionally do NOT switch mid-stream — the track stays in html5
+//   until the next play(). But every state handles BUFFER_READY, so the flag is
+//   never lost, and the next play() will see the buffer and use Web Audio.
+//
+//   All DEACTIVATE transitions land in idle (not loading), so a deactivated track
+//   with a loaded buffer is always in idle+LOADED — ready for Web Audio on re-play.
+//
 // Bug fixes in this rewrite:
 //   #2: BUFFER_READY in html5 stays in html5 (no longer auto-transitions to webaudio)
 //   #3: DEACTIVATE from webaudio → idle (was staying in webaudio)
@@ -83,6 +93,12 @@ export function createTrackMachine(initialContext: TrackContext) {
           BUFFER_LOADING: {
             actions: assign({ webAudioLoadingState: () => 'LOADING' as WebAudioLoadingState }),
           },
+          BUFFER_READY: {
+            actions: assign({ webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState }),
+          },
+          BUFFER_ERROR: {
+            actions: assign({ webAudioLoadingState: () => 'ERROR' as WebAudioLoadingState }),
+          },
           URL_RESOLVED: {
             actions: assign({
               resolvedUrl: ({ event }) => (event as { type: 'URL_RESOLVED'; url: string }).url,
@@ -140,7 +156,7 @@ export function createTrackMachine(initialContext: TrackContext) {
             }),
           },
           DEACTIVATE: {
-            target: 'loading',
+            target: 'idle',
             actions: assign({ isPlaying: () => false }),
           },
         },
@@ -177,6 +193,10 @@ export function createTrackMachine(initialContext: TrackContext) {
               webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
               playbackType: () => 'WEBAUDIO' as PlaybackType,
             }),
+          },
+          DEACTIVATE: {
+            target: 'idle',
+            actions: assign({ isPlaying: () => false }),
           },
           URL_RESOLVED: {
             actions: assign({
