@@ -56,15 +56,12 @@ export class Track {
   private webAudioStartedAt = 0;
   /** Track-time (seconds) frozen at the moment of the most recent pause. */
   private pausedAtTrackTime = 0;
-  scheduledStartContextTime: number | null = null;
-
   // ---- FSM -----------------------------------------------------------------
   private readonly _actor;
 
   // ---- Callbacks -----------------------------------------------------------
   private readonly queueRef: TrackQueueRef;
   private rafId: number | null = null;
-  private _notifiedLookahead = false;
 
   constructor(opts: {
     trackUrl: string;
@@ -95,14 +92,10 @@ export class Track {
       );
     };
     this.audio.onended = () => {
-      const s = this._actor.getSnapshot().value;
       this.queueRef.onDebug(
-        `audio.onended track=${this.index} machineState=${s} queueIdx=${this.queueRef.currentTrackIndex}`
+        `audio.onended track=${this.index} machineState=${this._actor.getSnapshot().value} queueIdx=${this.queueRef.currentTrackIndex}`
       );
-      if (s === 'html5' || s === 'idle') {
-        this._actor.send({ type: 'HTML5_ENDED' });
-        this.queueRef.onTrackEnded(this);
-      }
+      this._actor.send({ type: 'HTML5_ENDED' });
     };
 
     this._webAudioDisabled = opts.queue.webAudioIsDisabled;
@@ -113,11 +106,58 @@ export class Track {
       skipHEAD: this.skipHEAD,
       playbackType: 'HTML5',
       webAudioLoadingState: 'NONE',
-      webAudioStartedAt: 0,
-      pausedAtTrackTime: 0,
       isPlaying: false,
+      scheduledStartContextTime: null,
+      notifiedLookahead: false,
     };
-    this._actor = createActor(createTrackMachine(initialContext));
+    const machine = createTrackMachine(initialContext).provide({
+      guards: {
+        canPlayWebAudio: () => !!(this.ctx && this.audioBuffer && this.gainNode),
+      },
+      actions: {
+        playHtml5: () => this._playHtml5(),
+        startSourceNode: () => {
+          this._startSourceNode(this.pausedAtTrackTime);
+        },
+        startScheduledSourceNode: ({ context }: { context: TrackContext }) => {
+          const when = context.scheduledStartContextTime;
+          if (when === null || !this.ctx || !this.audioBuffer || !this.gainNode) return;
+          this._stopSourceNode();
+          this.sourceNode = this.ctx.createBufferSource();
+          this.sourceNode.buffer = this.audioBuffer;
+          this.sourceNode.connect(this.gainNode);
+          this.gainNode.connect(this.ctx.destination);
+          this.sourceNode.onended = this._handleWebAudioEnded;
+          this.sourceNode.start(when, 0);
+          this.webAudioStartedAt = when;
+          this.queueRef.onDebug(
+            `startScheduledSourceNode track=${this.index} when=${when.toFixed(3)} ctxNow=${this.ctx.currentTime.toFixed(3)} delta=${(when - this.ctx.currentTime).toFixed(3)}s`
+          );
+        },
+        startProgressLoop: () => this.startProgressLoop(),
+        pauseHtml5: () => this.audio.pause(),
+        freezePausedTime: () => {
+          this.pausedAtTrackTime = this.currentTime;
+        },
+        stopSourceNode: () => this._stopSourceNode(),
+        disconnectGain: () => this._disconnectGain(),
+        stopProgressLoop: () => this._stopProgressLoop(),
+        reportProgress: () => this.queueRef.onProgress(this.toInfo()),
+        seekHtml5: () => this._seekHtml5(),
+        seekWebAudio: () => this._seekWebAudio(),
+        resetHtml5Element: () => {
+          this.audio.currentTime = 0;
+        },
+        resetTiming: () => {
+          this.webAudioStartedAt = 0;
+          this.pausedAtTrackTime = 0;
+        },
+        notifyTrackEnded: () => {
+          queueMicrotask(() => this.queueRef.onTrackEnded(this));
+        },
+      },
+    });
+    this._actor = createActor(machine);
     this._actor.start();
   }
 
@@ -126,78 +166,20 @@ export class Track {
   // --------------------------------------------------------------------------
 
   play(): void {
-    const state = this._actor.getSnapshot().value;
-    let usedWebAudio = false;
-
     this.queueRef.onDebug(
-      `Track.play() track=${this.index} machineState=${state} hasBuffer=${!!this.audioBuffer} hasCtx=${!!this.ctx} audioPaused=${this.audio.paused}`
+      `Track.play() track=${this.index} machineState=${this._actor.getSnapshot().value} hasBuffer=${!!this.audioBuffer} hasCtx=${!!this.ctx} audioPaused=${this.audio.paused}`
     );
-
-    if (state === 'webaudio') {
-      usedWebAudio = this._playWebAudio();
-    } else if (this.audioBuffer && this.ctx && (state === 'loading' || state === 'idle')) {
-      usedWebAudio = this._playWebAudio();
-    }
-
-    if (!usedWebAudio) {
-      if (state === 'html5' && !this.audio.paused) {
-        // Already playing HTML5
-      } else {
-        this._playHtml5();
-      }
-    }
-
-    this._actor.send({ type: usedWebAudio ? 'PLAY_WEBAUDIO' : 'PLAY' });
-    this.startProgressLoop();
+    this._actor.send({ type: 'PLAY' });
   }
 
   pause(): void {
-    const state = this._actor.getSnapshot().value;
-    if (state === 'webaudio') {
-      this.pausedAtTrackTime = this.currentTime;
-      this._stopSourceNode();
-      this._disconnectGain();
-    } else {
-      this.audio.pause();
-    }
     this._actor.send({ type: 'PAUSE' });
-    this._stopProgressLoop();
-    this.queueRef.onProgress(this.toInfo());
   }
 
   seek(time: number): void {
     const clamped = Math.max(0, isNaN(this.duration) ? time : Math.min(time, this.duration));
     this.pausedAtTrackTime = clamped;
-
-    if (this._actor.getSnapshot().value === 'webaudio') {
-      const snap = this._actor.getSnapshot();
-      const wasPlaying = snap.context.isPlaying;
-      this._stopSourceNode();
-      // Clear stale scheduled start time so _computeTrackEndTime uses the
-      // new seek position instead of the original gapless-scheduled time.
-      this.scheduledStartContextTime = null;
-      if (wasPlaying) {
-        this._startSourceNode(clamped);
-      }
-    } else {
-      // Ensure the HTML5 element is loading so seek can succeed
-      if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
-      if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-        this.audio.currentTime = clamped;
-      } else {
-        this.audio.addEventListener(
-          'loadedmetadata',
-          () => {
-            this.audio.currentTime = clamped;
-          },
-          { once: true }
-        );
-        this.audio.load();
-      }
-    }
-
     this._actor.send({ type: 'SEEK', time: clamped });
-    this.queueRef.onProgress(this.toInfo());
   }
 
   setVolume(v: number): void {
@@ -226,39 +208,13 @@ export class Track {
   }
 
   activate(): void {
-    const state = this._actor.getSnapshot().value;
-    // If the track was in webaudio or loading state (e.g. from gapless scheduling,
-    // preload BUFFER_READY, or stuck in loading), reset it so play() can start
-    // from a clean state.
-    if (state === 'webaudio' || state === 'loading') {
-      this._stopSourceNode();
-      this._disconnectGain();
-      this.scheduledStartContextTime = null;
-      this._stopProgressLoop();
-      this._actor.send({ type: 'DEACTIVATE' });
-    }
-    // Always reset playback position — activate means start from the beginning.
-    this.webAudioStartedAt = 0;
-    this.pausedAtTrackTime = 0;
-    this._notifiedLookahead = false;
-    // If the HTML5 element finished playing, reset it so play() works again
-    if (this.audio.ended || this.audio.currentTime > 0) {
-      this.audio.currentTime = 0;
-    }
+    this._actor.send({ type: 'ACTIVATE' });
   }
 
   deactivate(): void {
     this.queueRef.onDebug(
       `Track.deactivate() track=${this.index} machineState=${this._actor.getSnapshot().value} isPlaying=${this.isPlaying}`
     );
-    this._stopSourceNode();
-    this._disconnectGain();
-    this.webAudioStartedAt = 0;
-    this.pausedAtTrackTime = 0;
-    this.scheduledStartContextTime = null;
-    this.audio.pause();
-    this.audio.currentTime = 0;
-    this._stopProgressLoop();
     this._actor.send({ type: 'DEACTIVATE' });
     this.queueRef.onDebug(
       `Track.deactivate() done track=${this.index} machineState=${this._actor.getSnapshot().value}`
@@ -279,35 +235,14 @@ export class Track {
   // --------------------------------------------------------------------------
 
   cancelGaplessStart(): void {
-    if (this.scheduledStartContextTime === null) return;
-    this._stopSourceNode();
-    this._disconnectGain();
-    this.scheduledStartContextTime = null;
-    this.webAudioStartedAt = 0;
-    this.pausedAtTrackTime = 0;
-    this._stopProgressLoop();
-    this._actor.send({ type: 'DEACTIVATE' });
+    const snap = this._actor.getSnapshot();
+    if (snap.context.scheduledStartContextTime === null) return;
+    this._actor.send({ type: 'CANCEL_GAPLESS' });
   }
 
   scheduleGaplessStart(when: number): void {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
-
-    this.scheduledStartContextTime = when;
-
-    this._stopSourceNode();
-    this.sourceNode = this.ctx.createBufferSource();
-    this.sourceNode.buffer = this.audioBuffer;
-    this.sourceNode.connect(this.gainNode);
-    this.gainNode.connect(this.ctx.destination);
-    this.sourceNode.onended = this._handleWebAudioEnded;
-
-    this.sourceNode.start(when, 0);
-    this.webAudioStartedAt = when;
-
-    this._actor.send({ type: 'PLAY_WEBAUDIO' });
-    this.queueRef.onDebug(
-      `scheduleGaplessStart track=${this.index} when=${when.toFixed(3)} ctxNow=${this.ctx.currentTime.toFixed(3)} delta=${(when - this.ctx.currentTime).toFixed(3)}s ctxState=${this.ctx.state}`
-    );
+    this._actor.send({ type: 'SCHEDULE_GAPLESS', when });
   }
 
   // --------------------------------------------------------------------------
@@ -315,8 +250,8 @@ export class Track {
   // --------------------------------------------------------------------------
 
   get currentTime(): number {
-    if (this._isUsingWebAudio) {
-      const snap = this._actor.getSnapshot();
+    const snap = this._actor.getSnapshot();
+    if (snap.value === 'webaudio') {
       if (!snap.context.isPlaying) return this.pausedAtTrackTime;
       if (!this.ctx) return 0;
       return Math.max(0, this.ctx.currentTime - this.webAudioStartedAt);
@@ -330,7 +265,8 @@ export class Track {
   }
 
   get isPaused(): boolean {
-    if (this._isUsingWebAudio) return !this._actor.getSnapshot().context.isPlaying;
+    const snap = this._actor.getSnapshot();
+    if (snap.value === 'webaudio') return !snap.context.isPlaying;
     return this.audio.paused;
   }
 
@@ -356,6 +292,10 @@ export class Track {
 
   get machineState(): string {
     return this._actor.getSnapshot().value as string;
+  }
+
+  get scheduledStartContextTime(): number | null {
+    return this._actor.getSnapshot().context.scheduledStartContextTime;
   }
 
   get isBufferLoaded(): boolean {
@@ -398,26 +338,26 @@ export class Track {
     }
   }
 
+  private _seekHtml5(): void {
+    const clamped = this.pausedAtTrackTime;
+    if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
+    if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      this.audio.currentTime = clamped;
+    } else {
+      this.audio.addEventListener(
+        'loadedmetadata',
+        () => {
+          this.audio.currentTime = clamped;
+        },
+        { once: true }
+      );
+      this.audio.load();
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Private: Web Audio helpers
   // --------------------------------------------------------------------------
-
-  private get _isUsingWebAudio(): boolean {
-    return this._actor.getSnapshot().value === 'webaudio';
-  }
-
-  private _playWebAudio(): boolean {
-    if (!this.ctx || !this.audioBuffer || !this.gainNode) {
-      this.queueRef.onDebug(
-        `_playWebAudio BAIL track=${this.index} ctx=${!!this.ctx} buf=${!!this.audioBuffer} gain=${!!this.gainNode}`
-      );
-      return false;
-    }
-    const snap = this._actor.getSnapshot();
-    const resumeFrom = !snap.context.isPlaying ? this.pausedAtTrackTime : 0;
-    this._startSourceNode(resumeFrom);
-    return true;
-  }
 
   private _startSourceNode(offset: number): void {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
@@ -464,14 +404,22 @@ export class Track {
     }
   }
 
+  private _seekWebAudio(): void {
+    const snap = this._actor.getSnapshot();
+    const wasPlaying = snap.context.isPlaying;
+    const clamped = this.pausedAtTrackTime;
+    this._stopSourceNode();
+    if (wasPlaying) {
+      this._startSourceNode(clamped);
+    }
+  }
+
   private _handleWebAudioEnded = (): void => {
     this.queueRef.onDebug(
       `_handleWebAudioEnded track=${this.index} sourceNode=${!!this.sourceNode} queueIdx=${this.queueRef.currentTrackIndex}`
     );
     if (!this.sourceNode) return;
     this._actor.send({ type: 'WEBAUDIO_ENDED' });
-    this._stopProgressLoop();
-    this.queueRef.onTrackEnded(this);
   };
 
   // --------------------------------------------------------------------------
@@ -504,7 +452,7 @@ export class Track {
         .then((audioBuffer) => {
           this.audioBuffer = audioBuffer;
           this._actor.send({ type: 'BUFFER_READY' });
-          this.queueRef.onTrackBufferReady(this);
+          queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
         })
         .catch((err: unknown) => {
           if (err instanceof Error && err.name === 'AbortError') return;
@@ -551,13 +499,14 @@ export class Track {
       this.queueRef.onProgress(this.toInfo());
 
       const remaining = this.duration - this.currentTime;
+      const snap = this._actor.getSnapshot();
       if (
-        !this._notifiedLookahead &&
+        !snap.context.notifiedLookahead &&
         !isNaN(remaining) &&
         remaining <= GAPLESS_SCHEDULE_LOOKAHEAD
       ) {
-        this._notifiedLookahead = true;
-        this.queueRef.onTrackBufferReady(this);
+        this._actor.send({ type: 'LOOKAHEAD_REACHED' });
+        queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
       }
 
       this.rafId = requestAnimationFrame(loop);

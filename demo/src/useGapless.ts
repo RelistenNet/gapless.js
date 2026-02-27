@@ -191,7 +191,7 @@ export function useGapless(options: {
       addLog('duration not yet known', 'warn');
       return;
     }
-    const t = Math.max(0, cur.duration - 5);
+    const t = Math.max(0, cur.duration - 2);
     queue!.seek(t);
     const mins = Math.floor(t / 60);
     const secs = String(Math.floor(t % 60)).padStart(2, '0');

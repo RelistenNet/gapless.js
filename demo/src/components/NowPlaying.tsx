@@ -68,7 +68,7 @@ export function NowPlaying({
           {isPlaying ? '\u23f8 Pause' : '\u25b6 Play'}
         </button>
         <button onClick={onNext}>Next {'\u25b6\u25b6'}</button>
-        <button onClick={onSeekToEnd}>Skip to end {'\u2212'}5s</button>
+        <button onClick={onSeekToEnd}>Skip to end {'\u2212'}2s</button>
         <label>
           Vol{' '}
           <input

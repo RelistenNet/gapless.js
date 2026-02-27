@@ -69,6 +69,23 @@ describe('Track currentTime', () => {
     void ctx; // suppress unused warning
   });
 
+  it('resumes from correct position after pause/play on WebAudio', () => {
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+
+    t.play();
+    advanceTime(45); // play for 45s
+    expect(t.currentTime).toBeCloseTo(45, 1);
+
+    t.pause();
+    expect(t.currentTime).toBeCloseTo(45, 1); // frozen at 45
+
+    // Resume — must continue from 45, not reset to 0
+    t.play();
+    advanceTime(10);
+    expect(t.currentTime).toBeCloseTo(55, 1); // 45 + 10
+  });
+
   it('resets correctly after seek', async () => {
     const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;

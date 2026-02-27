@@ -215,13 +215,14 @@ describe('Queue callbacks', () => {
     expect(onError).toHaveBeenCalledOnce();
   });
 
-  it('calls onEnded when last track ends', () => {
+  it('calls onEnded when last track ends', async () => {
     const onEnded = vi.fn();
     const q = new Queue({ tracks: ['a.mp3'], onEnded });
     q.play();
     // Simulate the track ending
     const tracks = (q as unknown as { _tracks: Array<{ audio: HTMLAudioElement }> })._tracks;
     tracks[0].audio.onended?.(new Event('ended'));
+    await Promise.resolve();
     expect(onEnded).toHaveBeenCalledOnce();
   });
 });
@@ -264,7 +265,7 @@ describe('Queue TRACK_ENDED while paused', () => {
     return (q as unknown as InternalQueue)._tracks[i].audio as unknown as MockAudioElement;
   }
 
-  it('queue stays paused when a non-last track ends while paused', () => {
+  it('queue stays paused when a non-last track ends while paused', async () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     q.play();
     q.pause();
@@ -272,22 +273,24 @@ describe('Queue TRACK_ENDED while paused', () => {
 
     // Track 0 ends naturally (e.g. buffered audio drained)
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
 
     expect(q.isPaused).toBe(true);
     expect(q.isPlaying).toBe(false);
   });
 
-  it('index advances to the next track when a track ends while paused', () => {
+  it('index advances to the next track when a track ends while paused', async () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     q.play();
     q.pause();
 
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
 
     expect(q.currentTrackIndex).toBe(1);
   });
 
-  it('onStartNewTrack is fired with the next track when ended while paused', () => {
+  it('onStartNewTrack is fired with the next track when ended while paused', async () => {
     const onStartNewTrack = vi.fn();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onStartNewTrack });
     q.play();
@@ -295,23 +298,25 @@ describe('Queue TRACK_ENDED while paused', () => {
     onStartNewTrack.mockClear(); // clear the call from play()
 
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
 
     expect(onStartNewTrack).toHaveBeenCalledOnce();
     expect(onStartNewTrack.mock.calls[0][0].index).toBe(1);
   });
 
-  it('onEnded is called when the last track ends while paused', () => {
+  it('onEnded is called when the last track ends while paused', async () => {
     const onEnded = vi.fn();
     const q = new Queue({ tracks: ['a.mp3'], onEnded });
     q.play();
     q.pause();
 
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
 
     expect(onEnded).toHaveBeenCalledOnce();
   });
 
-  it('play() after a track ends while paused starts the advanced track', () => {
+  it('play() after a track ends while paused starts the advanced track', async () => {
     const onStartNewTrack = vi.fn();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onStartNewTrack });
     q.play();
@@ -319,6 +324,7 @@ describe('Queue TRACK_ENDED while paused', () => {
     onStartNewTrack.mockClear();
 
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
     // Queue is paused at index 1; pressing play should start track 1
     q.play();
 
@@ -327,7 +333,7 @@ describe('Queue TRACK_ENDED while paused', () => {
     expect(audioOf(q, 1).play).toHaveBeenCalled();
   });
 
-  it('does NOT auto-play onPlayNextTrack when ended while paused', () => {
+  it('does NOT auto-play onPlayNextTrack when ended while paused', async () => {
     const onPlayNextTrack = vi.fn();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onPlayNextTrack });
     q.play();
@@ -335,6 +341,7 @@ describe('Queue TRACK_ENDED while paused', () => {
     onPlayNextTrack.mockClear();
 
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
 
     // onPlayNextTrack must not fire — user didn't press Next, and the queue is paused
     expect(onPlayNextTrack).not.toHaveBeenCalled();
@@ -356,7 +363,7 @@ describe('Queue onTrackEnded resets finished track', () => {
     return (q as unknown as InternalQueue)._tracks[i].audio as unknown as MockAudioElement;
   }
 
-  it('finished track currentTime resets to 0 after ending', () => {
+  it('finished track currentTime resets to 0 after ending', async () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
 
@@ -365,6 +372,7 @@ describe('Queue onTrackEnded resets finished track', () => {
 
     // Track 0 ends
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
 
     expect(q.currentTrackIndex).toBe(1);
     // The finished track should be reset
@@ -376,22 +384,24 @@ describe('Queue onTrackEnded resets finished track', () => {
     q.play();
 
     audioOf(q, 0).simulateEnded();
-
+    // Note: track machine state resets synchronously (HTML5_ENDED → idle),
+    // only the queue notification is deferred
     expect(q.tracks[0].machineState).toBe('idle');
     expect(q.tracks[0].isPlaying).toBe(false);
   });
 
-  it('new track starts at currentTime 0 after track transition', () => {
+  it('new track starts at currentTime 0 after track transition', async () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
 
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
 
     expect(q.currentTrackIndex).toBe(1);
     expect(audioOf(q, 1).currentTime).toBe(0);
   });
 
-  it('finished track with WebAudio buffer resets all timing fields', () => {
+  it('finished track with WebAudio buffer resets all timing fields', async () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
@@ -399,6 +409,7 @@ describe('Queue onTrackEnded resets finished track', () => {
     const internal = q as unknown as InternalQueue;
     // Track 0 ends via HTML5 (the onended handler)
     audioOf(q, 0).simulateEnded();
+    await Promise.resolve();
 
     expect(internal._tracks[0].webAudioStartedAt).toBe(0);
     expect(internal._tracks[0].pausedAtTrackTime).toBe(0);
@@ -433,7 +444,7 @@ describe('Queue MediaSession pause guard', () => {
     expect(q.isPlaying).toBe(false);
   });
 
-  it('TRACK_ENDED after a spurious pause still advances to next track when play() is called', () => {
+  it('TRACK_ENDED after a spurious pause still advances to next track when play() is called', async () => {
     // Sequence: playing → spurious pause (MediaSession) → track ends → play()
     // Expected: next track starts, not the finished track
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
@@ -447,6 +458,7 @@ describe('Queue MediaSession pause guard', () => {
 
     // Track 0 ends naturally
     internal._tracks[0].audio.simulateEnded();
+    await Promise.resolve();
 
     // Queue should have advanced index to 1, stayed paused
     expect(q.currentTrackIndex).toBe(1);
@@ -466,11 +478,11 @@ describe('Queue gapless transition progress', () => {
   // in the gapless branch of onTrackEnded.
 
   type InternalTrack = { audio: MockAudioElement; audioBuffer: AudioBuffer | null };
-  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
-  it('startProgressLoop() is called on the next track after a gapless transition', () => {
+  it('startProgressLoop() is called on the next track after a gapless transition', async () => {
     // Track 0 plays via HTML5 (no injected buffer), track 1 has a pre-decoded
-    // buffer. When track 0's HTML5 audio ends and _scheduledIndices contains
+    // buffer. When track 0's HTML5 audio ends and _scheduledNextIndex contains
     // track 1, Queue.onTrackEnded must call startProgressLoop on track 1.
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
 
@@ -480,7 +492,7 @@ describe('Queue gapless transition progress', () => {
 
     const internal = q as unknown as InternalQueue;
     // Mark track 1 as gapless-scheduled (simulates scheduleGaplessStart having run)
-    internal._scheduledIndices.add(1);
+    internal._scheduledNextIndex = 1;
 
     // Spy on track 1's startProgressLoop before the transition fires
     const track1 = internal._tracks[1] as unknown as { startProgressLoop: () => void };
@@ -488,6 +500,7 @@ describe('Queue gapless transition progress', () => {
 
     // Track 0 ends via HTML5 — triggers the gapless branch in onTrackEnded
     internal._tracks[0].audio.simulateEnded();
+    await Promise.resolve();
 
     expect(loopSpy).toHaveBeenCalledOnce();
   });
@@ -515,7 +528,7 @@ describe('Queue seek cancels stale gapless schedule', () => {
     scheduledStartContextTime: number | null;
     cancelGaplessStart: () => void;
   };
-  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
   it('seek() cancels a scheduled gapless start on the next track', async () => {
     mockFetchSuccess();
@@ -527,7 +540,7 @@ describe('Queue seek cancels stale gapless schedule', () => {
 
     const internal = q as unknown as InternalQueue;
     // Verify track 1 was gapless-scheduled
-    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._scheduledNextIndex).toBe(1);
     expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
 
     // Seek current track — should cancel the stale schedule
@@ -535,7 +548,7 @@ describe('Queue seek cancels stale gapless schedule', () => {
 
     // The old schedule must be cleared and rescheduled
     // (rescheduled because both buffers are still ready)
-    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._scheduledNextIndex).toBe(1);
     // The new scheduled time should be based on the seek position
     const newStart = internal._tracks[1].scheduledStartContextTime;
     expect(newStart).not.toBeNull();
@@ -592,7 +605,7 @@ describe('Queue seek cancels stale gapless schedule', () => {
 
     // Track 0 has no buffer, so no gapless was scheduled
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.size).toBe(0);
+    expect(internal._scheduledNextIndex).toBeNull();
 
     // Should not throw
     expect(() => q.seek(10)).not.toThrow();
@@ -615,7 +628,7 @@ describe('Queue pause cancels stale gapless schedule', () => {
     scheduledStartContextTime: number | null;
     cancelGaplessStart: () => void;
   };
-  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
   it('pause() cancels the scheduled gapless start on the next track', async () => {
     mockFetchSuccess();
@@ -625,12 +638,12 @@ describe('Queue pause cancels stale gapless schedule', () => {
     await new Promise(r => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._scheduledNextIndex).toBe(1);
     expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
 
     q.pause();
 
-    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(internal._scheduledNextIndex).not.toBe(1);
     expect(internal._tracks[1].scheduledStartContextTime).toBeNull();
   });
 
@@ -642,16 +655,14 @@ describe('Queue pause cancels stale gapless schedule', () => {
     await new Promise(r => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.has(1)).toBe(true);
-    const originalStart = internal._tracks[1].scheduledStartContextTime;
-
+    expect(internal._scheduledNextIndex).toBe(1);
     q.pause();
-    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(internal._scheduledNextIndex).not.toBe(1);
     expect(internal._tracks[1].scheduledStartContextTime).toBeNull();
 
     // play() must reschedule gapless with a fresh timing
     q.play();
-    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._scheduledNextIndex).toBe(1);
     expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
   });
 
@@ -660,7 +671,7 @@ describe('Queue pause cancels stale gapless schedule', () => {
     q.play();
 
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.size).toBe(0);
+    expect(internal._scheduledNextIndex).toBeNull();
 
     expect(() => q.pause()).not.toThrow();
     expect(q.isPaused).toBe(true);
@@ -675,7 +686,7 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     scheduledStartContextTime: number | null;
     cancelGaplessStart: () => void;
   };
-  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
   it('next() cancels all scheduled gapless starts', async () => {
     mockFetchSuccess();
@@ -685,13 +696,13 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     await new Promise(r => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._scheduledNextIndex).toBe(1);
 
     q.next();
 
     // All old schedules should be cleared
     // (track 1 is now current, track 2 may or may not be scheduled yet)
-    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(internal._scheduledNextIndex).not.toBe(1);
   });
 
   it('next() resets the previously-scheduled track machine state', async () => {
@@ -719,12 +730,12 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     await new Promise(r => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._scheduledNextIndex).toBe(1);
 
     // Seek to 0 so previous() doesn't just restart the track (threshold is 8s)
     q.previous();
 
-    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(internal._scheduledNextIndex).not.toBe(1);
   });
 
   it('gotoTrack() cancels all scheduled gapless starts', async () => {
@@ -735,11 +746,11 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     await new Promise(r => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._scheduledNextIndex).toBe(1);
 
     q.gotoTrack(2, true);
 
-    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(internal._scheduledNextIndex).not.toBe(1);
     expect(q.currentTrackIndex).toBe(2);
   });
 
@@ -769,11 +780,11 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     await new Promise(r => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.has(1)).toBe(true);
+    expect(internal._scheduledNextIndex).toBe(1);
 
     q.gotoTrack(2, false);
 
-    expect(internal._scheduledIndices.has(1)).toBe(false);
+    expect(internal._scheduledNextIndex).not.toBe(1);
     expect(q.currentTrackIndex).toBe(2);
   });
 
@@ -782,7 +793,7 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     q.play();
 
     const internal = q as unknown as InternalQueue;
-    expect(internal._scheduledIndices.size).toBe(0);
+    expect(internal._scheduledNextIndex).toBeNull();
 
     expect(() => q.next()).not.toThrow();
     expect(q.currentTrackIndex).toBe(1);
@@ -847,7 +858,7 @@ describe('Queue HTML5 fallback and background loading', () => {
 
 describe('Queue preloading', () => {
   type InternalTrack = { audioBuffer: AudioBuffer | null; audio: HTMLAudioElement; isBufferLoaded: boolean };
-  type InternalQueue = { _tracks: InternalTrack[]; _scheduledIndices: Set<number> };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
   it('starts preloading next track immediately when play() is called', () => {
     const fetchSpy = mockFetchSuccess();
@@ -902,6 +913,7 @@ describe('Queue preloading', () => {
     await new Promise(r => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     tracks[0].audio.onended?.(new Event('ended'));
+    await Promise.resolve();
     expect(onStartNewTrack).toHaveBeenCalledOnce();
     expect(q.currentTrackIndex).toBe(1);
   });
@@ -915,8 +927,7 @@ describe('Queue preloading', () => {
     const tracks = (q as unknown as InternalQueue)._tracks;
     expect(tracks[0].isBufferLoaded).toBe(true);
     expect(tracks[1].isBufferLoaded).toBe(true);
-    const scheduled = (q as unknown as InternalQueue)._scheduledIndices;
-    expect(scheduled.has(1)).toBe(true);
+    expect((q as unknown as InternalQueue)._scheduledNextIndex).toBe(1);
   });
 
   it('preloads at most PRELOAD_AHEAD (2) tracks beyond current', async () => {
@@ -958,6 +969,55 @@ describe('Queue preloading', () => {
     expect(tracks[4].isBufferLoaded).toBe(false);
   });
 
+  it('previous() triggers preloading of tracks ahead of new position', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    // Play and advance to track 3
+    q.play();
+    q.gotoTrack(3, true);
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    // Go back to track 1
+    q.gotoTrack(1, true);
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    // Tracks 2 and 3 (ahead of track 1) should be preloaded
+    expect(tracks[2].isBufferLoaded).toBe(true);
+    expect(tracks[3].isBufferLoaded).toBe(true);
+  });
+
+  it('previous() from paused state triggers preloading', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    q.play();
+    q.gotoTrack(3, true);
+    q.pause();
+    // Go back via previous() while paused
+    q.previous();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    // Track 3 (1 ahead of track 2) should be preloaded
+    expect(tracks[3].isBufferLoaded).toBe(true);
+  });
+
+  it('gotoTrack() without playImmediately triggers preloading', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    // Goto track 2 without auto-play (from idle state)
+    q.gotoTrack(2);
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    // Track 3 (1 ahead of track 2) should be preloaded
+    expect(tracks[3].isBufferLoaded).toBe(true);
+  });
+
   it('next() on preloaded track transitions to playing state', async () => {
     mockFetchSuccess();
     const onStartNewTrack = vi.fn();
@@ -972,5 +1032,283 @@ describe('Queue preloading', () => {
     expect(q.currentTrackIndex).toBe(1);
     expect(q.isPlaying).toBe(true);
     expect(onStartNewTrack).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Core invariants — only one track playing at a time
+// ---------------------------------------------------------------------------
+describe('Queue invariant: only one track playing at a time', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    isPlaying: boolean;
+    machineState: string;
+  };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
+
+  function countPlaying(q: Queue): number {
+    // Count tracks with isPlaying=true, EXCLUDING gapless-scheduled future tracks
+    const internal = q as unknown as InternalQueue;
+    let count = 0;
+    for (let i = 0; i < q.tracks.length; i++) {
+      const t = internal._tracks[i];
+      if (t.isPlaying && internal._scheduledNextIndex !== i) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  it('after play(), exactly one track is playing', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    expect(countPlaying(q)).toBe(1);
+    expect(q.tracks[0].isPlaying).toBe(true);
+  });
+
+  it('after next(), old track is not playing', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    q.next();
+    expect(q.tracks[0].isPlaying).toBe(false);
+    expect(q.tracks[0].machineState).toBe('idle');
+    expect(q.tracks[1].isPlaying).toBe(true);
+    expect(countPlaying(q)).toBe(1);
+  });
+
+  it('after rapid next() calls, only the final track is playing', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'] });
+    q.play();
+    q.next();
+    q.next();
+    q.next();
+    // Track 3 (last) should be the only one playing
+    expect(q.currentTrackIndex).toBe(3);
+    for (let i = 0; i < 3; i++) {
+      expect(q.tracks[i].isPlaying).toBe(false);
+      expect(q.tracks[i].machineState).toBe('idle');
+    }
+    expect(q.tracks[3].isPlaying).toBe(true);
+    expect(countPlaying(q)).toBe(1);
+  });
+
+  it('after gotoTrack(), old track is not playing', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    q.gotoTrack(2, true);
+    expect(q.tracks[0].isPlaying).toBe(false);
+    expect(q.tracks[0].machineState).toBe('idle');
+    expect(q.tracks[2].isPlaying).toBe(true);
+    expect(countPlaying(q)).toBe(1);
+  });
+
+  it('after pause(), current track is not playing', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    q.pause();
+    expect(q.tracks[0].isPlaying).toBe(false);
+    expect(q.isPlaying).toBe(false);
+    expect(q.isPaused).toBe(true);
+  });
+
+  it('pause then play resumes the correct track', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    q.next(); // → track 1
+    q.pause();
+    expect(q.currentTrackIndex).toBe(1);
+    q.play();
+    expect(q.currentTrackIndex).toBe(1);
+    expect(q.tracks[1].isPlaying).toBe(true);
+    expect(countPlaying(q)).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// seekCurrent uses correct track
+// ---------------------------------------------------------------------------
+describe('Queue seek targets correct track', () => {
+  it('seek() operates on the current track, not a stale reference', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    q.next(); // → track 1
+    q.seek(42);
+    // Track 1 (current) should have been seeked
+    const tracks = (q as unknown as { _tracks: Array<{ pausedAtTrackTime: number }> })._tracks;
+    expect(tracks[1].pausedAtTrackTime).toBe(42);
+    // Track 0 should NOT have been seeked
+    expect(tracks[0].pausedAtTrackTime).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// _scheduledNextIndex cleanup after gapless transition
+// ---------------------------------------------------------------------------
+describe('Queue _scheduledNextIndex cleanup', () => {
+  type InternalTrack = { audioBuffer: AudioBuffer | null; audio: MockAudioElement; isBufferLoaded: boolean };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
+
+  it('gapless-transitioned track is removed from _scheduledNextIndex', async () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 1, 180);
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    // Simulate gapless scheduling for track 1
+    internal._scheduledNextIndex = 1;
+
+    // Track 0 ends → gapless transition to track 1
+    internal._tracks[0].audio.simulateEnded();
+    await Promise.resolve();
+
+    expect(q.currentTrackIndex).toBe(1);
+    // Track 1 should no longer be in scheduledNextIndex — it's the current track now
+    expect(internal._scheduledNextIndex).not.toBe(1);
+  });
+
+  it('after gapless transition, pause then play works correctly', async () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 1, 180);
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    internal._scheduledNextIndex = 1;
+
+    // Track 0 ends → gapless to track 1
+    internal._tracks[0].audio.simulateEnded();
+    await Promise.resolve();
+    expect(q.currentTrackIndex).toBe(1);
+
+    // Pause and play should work normally
+    q.pause();
+    q.play();
+    expect(q.isPlaying).toBe(true);
+    expect(q.currentTrackIndex).toBe(1);
+  });
+
+  it('after gapless transition, next() properly deactivates gapless-transitioned track', async () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 1, 180);
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    internal._scheduledNextIndex = 1;
+
+    // Track 0 ends → gapless to track 1
+    internal._tracks[0].audio.simulateEnded();
+    await Promise.resolve();
+    expect(q.currentTrackIndex).toBe(1);
+
+    // Navigate to next track
+    q.next();
+    expect(q.currentTrackIndex).toBe(2);
+    // Track 1 should be idle and not playing
+    expect(q.tracks[1].isPlaying).toBe(false);
+    expect(q.tracks[1].machineState).toBe('idle');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Re-entrancy safety: TRACK_ENDED → NEXT transition via queueMicrotask
+// ---------------------------------------------------------------------------
+describe('Queue re-entrancy safety', () => {
+  type InternalTrack = { audio: MockAudioElement; audioBuffer: AudioBuffer | null };
+  type InternalQueue = { _tracks: InternalTrack[] };
+
+  it('TRACK_ENDED does not cause stale state reads via re-entrant sends', async () => {
+    // Before the queueMicrotask fix, notifyTrackEnded would synchronously
+    // call queueRef.onTrackEnded → queue sends TRACK_ENDED → queue sends
+    // DEACTIVATE back to the track — all in one call stack. This could cause
+    // stale reads if the track machine hadn't finished its transition.
+    const onStartNewTrack = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], onStartNewTrack });
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    // Track 0 ends — notifyTrackEnded is deferred via queueMicrotask
+    internal._tracks[0].audio.simulateEnded();
+
+    // Before microtask fires, queue should still be at track 0
+    expect(q.currentTrackIndex).toBe(0);
+    // Track 0's machine should already be in idle (track transition is synchronous)
+    expect(q.tracks[0].machineState).toBe('idle');
+
+    // After microtask, queue advances
+    await Promise.resolve();
+    expect(q.currentTrackIndex).toBe(1);
+    expect(q.isPlaying).toBe(true);
+    expect(onStartNewTrack).toHaveBeenCalled();
+  });
+
+  it('rapid track endings via microtask do not corrupt queue state', async () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    // End track 0
+    internal._tracks[0].audio.simulateEnded();
+    await Promise.resolve();
+    expect(q.currentTrackIndex).toBe(1);
+
+    // End track 1
+    internal._tracks[1].audio.simulateEnded();
+    await Promise.resolve();
+    expect(q.currentTrackIndex).toBe(2);
+
+    // Only track 2 should be playing
+    expect(q.tracks[0].isPlaying).toBe(false);
+    expect(q.tracks[1].isPlaying).toBe(false);
+    expect(q.tracks[2].isPlaying).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gapless scheduling context verification
+// ---------------------------------------------------------------------------
+describe('Queue gapless scheduling state', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    scheduledStartContextTime: number | null;
+  };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
+
+  it('scheduledNextIndex matches the actually-scheduled track', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledNextIndex).toBe(1);
+    expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
+  });
+
+  it('scheduledNextIndex is null when no gapless is scheduled', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledNextIndex).toBeNull();
+  });
+
+  it('scheduledNextIndex is cleared after track transition', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 300);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    expect(internal._scheduledNextIndex).toBe(1);
+
+    // Next cancels all gapless
+    q.next();
+    // After next(), gapless for track 1 should be cancelled
+    // (track 1 is now current, not a future scheduled track)
+    expect(internal._scheduledNextIndex).toBeNull();
   });
 });

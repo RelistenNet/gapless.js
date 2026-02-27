@@ -8,6 +8,12 @@
 //   ended    The last track in the queue has finished.
 //
 // Root-level `on:` eliminates the handler duplication that plagued v2.
+//
+// Named actions (no-op defaults here, real implementations via .provide()):
+//   Actions before assign() see the OLD context (e.g. deactivateCurrent
+//   sees the old currentTrackIndex). Actions after assign() see the NEW
+//   context (e.g. activateAndPlayCurrent sees the incremented index).
+//   Implementations MUST use the ({ context }) parameter, NOT getSnapshot().
 // ---------------------------------------------------------------------------
 
 import { setup, assign } from 'xstate';
@@ -48,6 +54,26 @@ export function createQueueMachine(initialContext: QueueContext) {
       playImmediately: ({ event }) =>
         !!(event as { type: 'GOTO'; playImmediately?: boolean }).playImmediately,
     },
+    actions: {
+      deactivateCurrent: () => {},
+      deactivateEndedTrack: () => {},
+      activateAndPlayCurrent: () => {},
+      playOrContinueGapless: () => {},
+      cancelAllGapless: () => {},
+      notifyStartNewTrack: () => {},
+      notifyPlayNextTrack: () => {},
+      notifyPlayPreviousTrack: () => {},
+      notifyEnded: () => {},
+      updateMediaSessionMetadata: () => {},
+      preloadAhead: () => {},
+      playCurrent: () => {},
+      pauseCurrent: () => {},
+      seekCurrent: () => {},
+      seekCurrentToZero: () => {},
+      scheduleGapless: () => {},
+      cancelScheduledGapless: () => {},
+      cancelAndRescheduleGapless: () => {},
+    },
   }).createMachine({
     id: 'queue',
     initial: 'idle',
@@ -78,22 +104,44 @@ export function createQueueMachine(initialContext: QueueContext) {
       // -----------------------------------------------------------------
       idle: {
         on: {
-          PLAY: { target: 'playing' },
+          PLAY: {
+            target: 'playing',
+            actions: ['playCurrent', 'updateMediaSessionMetadata', 'preloadAhead', 'scheduleGapless'],
+          },
           GOTO: [
             {
               guard: 'playImmediately',
               target: 'playing',
-              actions: assign({
-                currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
-              }),
+              actions: [
+                'deactivateCurrent',
+                'cancelAllGapless',
+                assign({
+                  currentTrackIndex: ({ event }) =>
+                    (event as { type: 'GOTO'; index: number }).index,
+                }),
+                'activateAndPlayCurrent',
+                'notifyStartNewTrack',
+                'updateMediaSessionMetadata',
+                'preloadAhead',
+              ],
             },
             {
               target: 'paused',
-              actions: assign({
-                currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
-              }),
+              actions: [
+                'deactivateCurrent',
+                'cancelAllGapless',
+                assign({
+                  currentTrackIndex: ({ event }) =>
+                    (event as { type: 'GOTO'; index: number }).index,
+                }),
+                'seekCurrentToZero',
+                'preloadAhead',
+              ],
             },
           ],
+          TRACK_LOADED: {
+            actions: ['preloadAhead'],
+          },
         },
       },
 
@@ -102,38 +150,101 @@ export function createQueueMachine(initialContext: QueueContext) {
       // -----------------------------------------------------------------
       playing: {
         on: {
-          PAUSE: { target: 'paused' },
-          TOGGLE: { target: 'paused' },
+          PAUSE: {
+            target: 'paused',
+            actions: ['cancelScheduledGapless', 'pauseCurrent'],
+          },
+          TOGGLE: {
+            target: 'paused',
+            actions: ['cancelScheduledGapless', 'pauseCurrent'],
+          },
           NEXT: {
-            actions: assign({
-              currentTrackIndex: ({ context }) => {
-                const next = context.currentTrackIndex + 1;
-                return next < context.trackCount ? next : context.currentTrackIndex;
-              },
-            }),
+            actions: [
+              'deactivateCurrent',
+              'cancelAllGapless',
+              assign({
+                currentTrackIndex: ({ context }) => {
+                  const next = context.currentTrackIndex + 1;
+                  return next < context.trackCount ? next : context.currentTrackIndex;
+                },
+              }),
+              'activateAndPlayCurrent',
+              'notifyStartNewTrack',
+              'notifyPlayNextTrack',
+              'updateMediaSessionMetadata',
+              'preloadAhead',
+            ],
           },
           PREVIOUS: {
-            actions: assign({
-              currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
-            }),
+            actions: [
+              'deactivateCurrent',
+              'cancelAllGapless',
+              assign({
+                currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
+              }),
+              'activateAndPlayCurrent',
+              'notifyStartNewTrack',
+              'notifyPlayPreviousTrack',
+              'updateMediaSessionMetadata',
+              'preloadAhead',
+            ],
           },
-          GOTO: {
-            actions: assign({
-              currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
-            }),
+          GOTO: [
+            {
+              guard: 'playImmediately',
+              actions: [
+                'deactivateCurrent',
+                'cancelAllGapless',
+                assign({
+                  currentTrackIndex: ({ event }) =>
+                    (event as { type: 'GOTO'; index: number }).index,
+                }),
+                'activateAndPlayCurrent',
+                'notifyStartNewTrack',
+                'updateMediaSessionMetadata',
+                'preloadAhead',
+              ],
+            },
+            {
+              actions: [
+                'deactivateCurrent',
+                'cancelAllGapless',
+                assign({
+                  currentTrackIndex: ({ event }) =>
+                    (event as { type: 'GOTO'; index: number }).index,
+                }),
+                'seekCurrentToZero',
+                'preloadAhead',
+              ],
+            },
+          ],
+          SEEK: {
+            actions: ['seekCurrent', 'cancelAndRescheduleGapless'],
           },
-          SEEK: {},
           TRACK_ENDED: [
             {
               guard: 'hasNextTrack',
               target: 'playing',
-              actions: assign({
-                currentTrackIndex: ({ context }) => context.currentTrackIndex + 1,
-              }),
+              actions: [
+                'deactivateEndedTrack',
+                assign({
+                  currentTrackIndex: ({ context }) => context.currentTrackIndex + 1,
+                }),
+                'playOrContinueGapless',
+                'notifyStartNewTrack',
+                'notifyPlayNextTrack',
+                'updateMediaSessionMetadata',
+                'preloadAhead',
+              ],
             },
-            { target: 'ended' },
+            {
+              target: 'ended',
+              actions: ['deactivateEndedTrack', 'notifyEnded'],
+            },
           ],
-          TRACK_LOADED: {},
+          TRACK_LOADED: {
+            actions: ['scheduleGapless', 'preloadAhead'],
+          },
         },
       },
 
@@ -142,46 +253,99 @@ export function createQueueMachine(initialContext: QueueContext) {
       // -----------------------------------------------------------------
       paused: {
         on: {
-          PLAY: { target: 'playing' },
-          TOGGLE: { target: 'playing' },
+          PLAY: {
+            target: 'playing',
+            actions: ['playCurrent', 'updateMediaSessionMetadata', 'preloadAhead', 'scheduleGapless'],
+          },
+          TOGGLE: {
+            target: 'playing',
+            actions: ['playCurrent', 'updateMediaSessionMetadata', 'preloadAhead', 'scheduleGapless'],
+          },
           NEXT: {
-            actions: assign({
-              currentTrackIndex: ({ context }) => {
-                const next = context.currentTrackIndex + 1;
-                return next < context.trackCount ? next : context.currentTrackIndex;
-              },
-            }),
+            actions: [
+              'deactivateCurrent',
+              'cancelAllGapless',
+              assign({
+                currentTrackIndex: ({ context }) => {
+                  const next = context.currentTrackIndex + 1;
+                  return next < context.trackCount ? next : context.currentTrackIndex;
+                },
+              }),
+              'activateAndPlayCurrent',
+              'notifyStartNewTrack',
+              'notifyPlayNextTrack',
+              'updateMediaSessionMetadata',
+              'preloadAhead',
+            ],
           },
           PREVIOUS: {
-            actions: assign({
-              currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
-            }),
+            actions: [
+              'deactivateCurrent',
+              'cancelAllGapless',
+              assign({
+                currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
+              }),
+              'activateAndPlayCurrent',
+              'notifyStartNewTrack',
+              'notifyPlayPreviousTrack',
+              'updateMediaSessionMetadata',
+              'preloadAhead',
+            ],
           },
           GOTO: [
             {
               guard: 'playImmediately',
               target: 'playing',
-              actions: assign({
-                currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
-              }),
+              actions: [
+                'deactivateCurrent',
+                'cancelAllGapless',
+                assign({
+                  currentTrackIndex: ({ event }) =>
+                    (event as { type: 'GOTO'; index: number }).index,
+                }),
+                'activateAndPlayCurrent',
+                'notifyStartNewTrack',
+                'updateMediaSessionMetadata',
+                'preloadAhead',
+              ],
             },
             {
-              actions: assign({
-                currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
-              }),
+              actions: [
+                'deactivateCurrent',
+                'cancelAllGapless',
+                assign({
+                  currentTrackIndex: ({ event }) =>
+                    (event as { type: 'GOTO'; index: number }).index,
+                }),
+                'seekCurrentToZero',
+                'preloadAhead',
+              ],
             },
           ],
-          SEEK: {},
+          SEEK: {
+            actions: ['seekCurrent'],
+          },
           TRACK_ENDED: [
             {
               guard: 'hasNextTrack',
               target: 'paused',
-              actions: assign({
-                currentTrackIndex: ({ context }) => context.currentTrackIndex + 1,
-              }),
+              actions: [
+                'deactivateEndedTrack',
+                assign({
+                  currentTrackIndex: ({ context }) => context.currentTrackIndex + 1,
+                }),
+                'notifyStartNewTrack',
+                'updateMediaSessionMetadata',
+              ],
             },
-            { target: 'ended' },
+            {
+              target: 'ended',
+              actions: ['deactivateEndedTrack', 'notifyEnded'],
+            },
           ],
+          TRACK_LOADED: {
+            actions: ['preloadAhead'],
+          },
         },
       },
 
@@ -192,21 +356,43 @@ export function createQueueMachine(initialContext: QueueContext) {
         on: {
           PLAY: {
             target: 'playing',
-            actions: assign({ currentTrackIndex: () => 0 }),
+            actions: [
+              assign({ currentTrackIndex: () => 0 }),
+              'playCurrent',
+              'updateMediaSessionMetadata',
+              'preloadAhead',
+              'scheduleGapless',
+            ],
           },
           GOTO: [
             {
               guard: 'playImmediately',
               target: 'playing',
-              actions: assign({
-                currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
-              }),
+              actions: [
+                'deactivateCurrent',
+                'cancelAllGapless',
+                assign({
+                  currentTrackIndex: ({ event }) =>
+                    (event as { type: 'GOTO'; index: number }).index,
+                }),
+                'activateAndPlayCurrent',
+                'notifyStartNewTrack',
+                'updateMediaSessionMetadata',
+                'preloadAhead',
+              ],
             },
             {
               target: 'paused',
-              actions: assign({
-                currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
-              }),
+              actions: [
+                'deactivateCurrent',
+                'cancelAllGapless',
+                assign({
+                  currentTrackIndex: ({ event }) =>
+                    (event as { type: 'GOTO'; index: number }).index,
+                }),
+                'seekCurrentToZero',
+                'preloadAhead',
+              ],
             },
           ],
         },

@@ -36,8 +36,8 @@ export class Queue implements TrackQueueRef {
 
   private _volume: number;
 
-  /** Track indices for which a gapless start has been pre-scheduled. */
-  private _scheduledIndices = new Set<number>();
+  /** Index of the next track with a pre-scheduled gapless start, or null. */
+  private _scheduledNextIndex: number | null = null;
 
   private _throttledUpdatePositionState = throttle(
     (duration: number, currentTime: number) =>
@@ -82,12 +82,94 @@ export class Queue implements TrackQueueRef {
         })
     );
 
-    this._actor = createActor(
-      createQueueMachine({
-        currentTrackIndex: 0,
-        trackCount: this._tracks.length,
-      })
-    );
+    // -----------------------------------------------------------------------
+    // Wire up the queue machine with real action implementations.
+    //
+    // IMPORTANT: actions receive ({ context }) which reflects the in-progress
+    // context (updated by prior assign() calls within the same transition).
+    // Do NOT use this._actor.getSnapshot() inside actions — that returns the
+    // pre-transition snapshot and won't reflect intermediate assign() updates.
+    // -----------------------------------------------------------------------
+    const machine = createQueueMachine({
+      currentTrackIndex: 0,
+      trackCount: this._tracks.length
+    }).provide({
+      actions: {
+        deactivateCurrent: ({ context }) => {
+          this._trackAt(context.currentTrackIndex)?.deactivate();
+        },
+        deactivateEndedTrack: ({ context }) => {
+          this._trackAt(context.currentTrackIndex)?.deactivate();
+        },
+        activateAndPlayCurrent: ({ context }) => {
+          const track = this._trackAt(context.currentTrackIndex);
+          if (!track) return;
+          track.activate();
+          if (this._scheduledNextIndex !== track.index) {
+            track.play();
+          }
+        },
+        playOrContinueGapless: ({ context }) => {
+          const cur = this._trackAt(context.currentTrackIndex);
+          if (!cur) return;
+          if (this._scheduledNextIndex !== cur.index) {
+            cur.play();
+          } else {
+            this._scheduledNextIndex = null;
+            this.onDebug(
+              `onTrackEnded: gapless track ${cur.index} — sourceNode=${cur.hasSourceNode} isPlaying=${cur.isPlaying} machineState=${cur.machineState}`
+            );
+            cur.startProgressLoop();
+          }
+        },
+        cancelAllGapless: () => this._cancelScheduledGapless(),
+        notifyStartNewTrack: ({ context }) => {
+          const cur = this._trackAt(context.currentTrackIndex);
+          if (cur) this._onStartNewTrack?.(cur.toInfo());
+        },
+        notifyPlayNextTrack: ({ context }) => {
+          const cur = this._trackAt(context.currentTrackIndex);
+          if (cur) this._onPlayNextTrack?.(cur.toInfo());
+        },
+        notifyPlayPreviousTrack: ({ context }) => {
+          const cur = this._trackAt(context.currentTrackIndex);
+          if (cur) this._onPlayPreviousTrack?.(cur.toInfo());
+        },
+        notifyEnded: () => this._onEnded?.(),
+        updateMediaSessionMetadata: ({ context }) => {
+          const cur = this._trackAt(context.currentTrackIndex);
+          if (cur) updateMediaSessionMetadata(cur.metadata);
+        },
+        preloadAhead: ({ context }) => {
+          this._preloadAhead(context.currentTrackIndex);
+        },
+        playCurrent: ({ context }) => {
+          this._trackAt(context.currentTrackIndex)?.play();
+        },
+        pauseCurrent: ({ context }) => {
+          this._trackAt(context.currentTrackIndex)?.pause();
+        },
+        seekCurrent: ({ context, event }) => {
+          const e = event as { type: 'SEEK'; time: number };
+          this._trackAt(context.currentTrackIndex)?.seek(e.time);
+        },
+        seekCurrentToZero: ({ context }) => {
+          this._trackAt(context.currentTrackIndex)?.seek(0);
+        },
+        scheduleGapless: ({ context }) => {
+          this._tryScheduleGapless(context.currentTrackIndex);
+        },
+        cancelScheduledGapless: () => {
+          this._cancelScheduledGapless();
+        },
+        cancelAndRescheduleGapless: ({ context }) => {
+          this._cancelScheduledGapless();
+          this._tryScheduleGapless(context.currentTrackIndex);
+        },
+      },
+    });
+
+    this._actor = createActor(machine);
 
     this._actor.subscribe((snapshot) => {
       updateMediaSessionPlaybackState(snapshot.value === 'playing');
@@ -111,19 +193,12 @@ export class Queue implements TrackQueueRef {
   // --------------------------------------------------------------------------
 
   play(): void {
-    const ct = this._currentTrack;
-    if (!ct) return;
-    ct.play();
+    if (!this._currentTrack) return;
     this._actor.send({ type: 'PLAY' });
-    updateMediaSessionMetadata(ct.metadata);
-    this._preloadAhead(ct.index);
-    this._tryScheduleGapless(ct);
   }
 
   pause(): void {
     this._actor.send({ type: 'PAUSE' });
-    this._cancelScheduledGapless();
-    this._currentTrack?.pause();
   }
 
   togglePlayPause(): void {
@@ -139,18 +214,7 @@ export class Queue implements TrackQueueRef {
     const nextIndex = snap.context.currentTrackIndex + 1;
     if (nextIndex >= this._tracks.length) return;
 
-    this._deactivateCurrent();
-    this._cancelAllScheduledGapless();
     this._actor.send({ type: 'NEXT' });
-    this._activateCurrent(true);
-
-    const cur = this._currentTrack;
-    if (cur) {
-      this._onStartNewTrack?.(cur.toInfo());
-      this._onPlayNextTrack?.(cur.toInfo());
-      updateMediaSessionMetadata(cur.metadata);
-    }
-    this._preloadAhead(this._actor.getSnapshot().context.currentTrackIndex);
   }
 
   previous(): void {
@@ -161,52 +225,19 @@ export class Queue implements TrackQueueRef {
       return;
     }
 
-    this._deactivateCurrent();
-    this._cancelAllScheduledGapless();
     this._actor.send({ type: 'PREVIOUS' });
-    this._activateCurrent(true);
-
-    const cur = this._currentTrack;
-    if (cur) {
-      this._onStartNewTrack?.(cur.toInfo());
-      this._onPlayPreviousTrack?.(cur.toInfo());
-      updateMediaSessionMetadata(cur.metadata);
-    }
   }
 
   gotoTrack(index: number, playImmediately = false): void {
     if (index < 0 || index >= this._tracks.length) return;
-    const prevSnap = this._actor.getSnapshot();
     this.onDebug(
-      `gotoTrack(${index}, playImmediately=${playImmediately}) queueState=${prevSnap.value} curIdx=${prevSnap.context.currentTrackIndex}`
+      `gotoTrack(${index}, playImmediately=${playImmediately}) queueState=${this._actor.getSnapshot().value} curIdx=${this._actor.getSnapshot().context.currentTrackIndex}`
     );
-    this._deactivateCurrent();
-    this._cancelAllScheduledGapless();
     this._actor.send({ type: 'GOTO', index, playImmediately });
-    const afterSnap = this._actor.getSnapshot();
-    this.onDebug(
-      `gotoTrack after GOTO → queueState=${afterSnap.value} curIdx=${afterSnap.context.currentTrackIndex}`
-    );
-
-    if (playImmediately) {
-      this._activateCurrent(true);
-      const cur = this._currentTrack;
-      if (cur) {
-        this.onDebug(
-          `gotoTrack activateCurrent done, track=${cur.index} trackState=${cur.playbackType} isPlaying=${cur.isPlaying}`
-        );
-        this._onStartNewTrack?.(cur.toInfo());
-        updateMediaSessionMetadata(cur.metadata);
-      }
-      this._preloadAhead(index);
-    } else {
-      this._currentTrack?.seek(0);
-    }
   }
 
   seek(time: number): void {
-    this._currentTrack?.seek(time);
-    this._cancelAndRescheduleGapless();
+    this._actor.send({ type: 'SEEK', time });
   }
 
   setVolume(volume: number): void {
@@ -237,7 +268,9 @@ export class Queue implements TrackQueueRef {
     for (let i = index; i < this._tracks.length; i++) {
       (this._tracks[i] as unknown as { index: number }).index = i;
     }
-    this._scheduledIndices.delete(index);
+    if (this._scheduledNextIndex === index) {
+      this._scheduledNextIndex = null;
+    }
     this._actor.send({ type: 'REMOVE_TRACK', index });
   }
 
@@ -296,51 +329,15 @@ export class Queue implements TrackQueueRef {
     );
     if (track.index !== snap.context.currentTrackIndex) return;
 
-    // Deactivate the finished track so its currentTime resets to 0
-    track.deactivate();
-
     this._actor.send({ type: 'TRACK_ENDED' });
     const newSnap = this._actor.getSnapshot();
     this.onDebug(
       `onTrackEnded after TRACK_ENDED → queueState=${newSnap.value} curIdx=${newSnap.context.currentTrackIndex}`
     );
-
-    if (newSnap.value === 'ended') {
-      this._onEnded?.();
-      return;
-    }
-
-    if (newSnap.value === 'playing') {
-      const cur = this._currentTrack;
-      if (cur) {
-        if (!this._scheduledIndices.has(cur.index)) {
-          cur.play();
-        } else {
-          this.onDebug(
-            `onTrackEnded: gapless track ${cur.index} — sourceNode=${cur.hasSourceNode} isPlaying=${cur.isPlaying} machineState=${cur.machineState}`
-          );
-          cur.startProgressLoop();
-        }
-        this._onStartNewTrack?.(cur.toInfo());
-        this._onPlayNextTrack?.(cur.toInfo());
-        updateMediaSessionMetadata(cur.metadata);
-        this._preloadAhead(cur.index);
-      }
-    }
-
-    if (newSnap.value === 'paused') {
-      const cur = this._currentTrack;
-      if (cur) {
-        this._onStartNewTrack?.(cur.toInfo());
-        updateMediaSessionMetadata(cur.metadata);
-      }
-    }
   }
 
   onTrackBufferReady(track: Track): void {
     this._actor.send({ type: 'TRACK_LOADED', index: track.index });
-    this._tryScheduleGapless(track);
-    this._preloadAhead(this._actor.getSnapshot().context.currentTrackIndex);
   }
 
   onProgress(info: TrackInfo): void {
@@ -367,21 +364,13 @@ export class Queue implements TrackQueueRef {
   // Private helpers
   // --------------------------------------------------------------------------
 
+  /** Look up a track by index — safe for use inside machine actions. */
+  private _trackAt(index: number): Track | undefined {
+    return this._tracks[index];
+  }
+
   private get _currentTrack(): Track | undefined {
     return this._tracks[this._actor.getSnapshot().context.currentTrackIndex];
-  }
-
-  private _deactivateCurrent(): void {
-    this._currentTrack?.deactivate();
-  }
-
-  private _activateCurrent(startPlaying: boolean): void {
-    const track = this._currentTrack;
-    if (!track) return;
-    track.activate();
-    if (startPlaying && !this._scheduledIndices.has(track.index)) {
-      track.play();
-    }
   }
 
   private _preloadAhead(fromIndex: number): void {
@@ -400,36 +389,19 @@ export class Queue implements TrackQueueRef {
   }
 
   private _cancelScheduledGapless(): void {
-    const curIndex = this._actor.getSnapshot().context.currentTrackIndex;
-    const nextIndex = curIndex + 1;
-    if (nextIndex < this._tracks.length && this._scheduledIndices.has(nextIndex)) {
-      this._tracks[nextIndex].cancelGaplessStart();
-      this._scheduledIndices.delete(nextIndex);
-      this.onDebug(`_cancelScheduledGapless: cancelled track ${nextIndex}`);
+    if (this._scheduledNextIndex === null) return;
+    const track = this._trackAt(this._scheduledNextIndex);
+    if (track) {
+      track.cancelGaplessStart();
+      this.onDebug(`_cancelScheduledGapless: cancelled track ${this._scheduledNextIndex}`);
     }
+    this._scheduledNextIndex = null;
   }
 
-  private _cancelAllScheduledGapless(): void {
-    for (const idx of this._scheduledIndices) {
-      this._tracks[idx]?.cancelGaplessStart();
-    }
-    this._scheduledIndices.clear();
-  }
-
-  private _cancelAndRescheduleGapless(): void {
-    this._cancelScheduledGapless();
-    const current = this._currentTrack;
-    if (current) {
-      this._tryScheduleGapless(current);
-    }
-  }
-
-  private _tryScheduleGapless(_fromTrack: Track): void {
+  private _tryScheduleGapless(curIndex: number): void {
     const ctx = getAudioContext();
     if (!ctx || this.webAudioIsDisabled) return;
 
-    const snap = this._actor.getSnapshot();
-    const curIndex = snap.context.currentTrackIndex;
     const nextIndex = curIndex + 1;
     if (nextIndex >= this._tracks.length) return;
 
@@ -439,7 +411,7 @@ export class Queue implements TrackQueueRef {
     if (
       !current.isBufferLoaded ||
       !next.isBufferLoaded ||
-      this._scheduledIndices.has(nextIndex) ||
+      this._scheduledNextIndex === nextIndex ||
       !current.isPlaying
     )
       return;
@@ -450,7 +422,7 @@ export class Queue implements TrackQueueRef {
     if (endTime < ctx.currentTime + 0.01) return;
 
     next.scheduleGaplessStart(endTime);
-    this._scheduledIndices.add(nextIndex);
+    this._scheduledNextIndex = nextIndex;
   }
 
   private _computeTrackEndTime(track: Track): number | null {

@@ -14,9 +14,9 @@ function makeCtx(overrides: Partial<TrackContext> = {}): TrackContext {
     skipHEAD: false,
     playbackType: 'HTML5',
     webAudioLoadingState: 'NONE',
-    webAudioStartedAt: 0,
-    pausedAtTrackTime: 0,
     isPlaying: false,
+    scheduledStartContextTime: null,
+    notifiedLookahead: false,
     ...overrides,
   };
 }
@@ -126,10 +126,10 @@ describe('TrackMachine', () => {
       expect(a.getSnapshot().context.isPlaying).toBe(false);
     });
 
-    it('updates seek time on SEEK', () => {
+    it('stays in html5 on SEEK', () => {
       const a = actorAt(makeCtx(), 'html5');
       a.send({ type: 'SEEK', time: 45.5 });
-      expect(a.getSnapshot().context.pausedAtTrackTime).toBe(45.5);
+      expect(a.getSnapshot().value).toBe('html5');
     });
 
     it('transitions html5 → idle on DEACTIVATE', () => {
@@ -252,10 +252,10 @@ describe('TrackMachine', () => {
       expect(a.getSnapshot().context.isPlaying).toBe(true);
     });
 
-    it('updates seek time on SEEK', () => {
+    it('stays in webaudio on SEEK', () => {
       const a = actorAt(makeCtx(), 'webaudio');
       a.send({ type: 'SEEK', time: 120 });
-      expect(a.getSnapshot().context.pausedAtTrackTime).toBe(120);
+      expect(a.getSnapshot().value).toBe('webaudio');
     });
 
     it('transitions webaudio → idle on WEBAUDIO_ENDED', () => {

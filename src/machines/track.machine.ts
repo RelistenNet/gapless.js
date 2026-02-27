@@ -34,9 +34,9 @@ export interface TrackContext {
   skipHEAD: boolean;
   playbackType: PlaybackType;
   webAudioLoadingState: WebAudioLoadingState;
-  webAudioStartedAt: number;
-  pausedAtTrackTime: number;
   isPlaying: boolean;
+  scheduledStartContextTime: number | null;
+  notifiedLookahead: boolean;
 }
 
 // ---- Events ----------------------------------------------------------------
@@ -55,7 +55,10 @@ export type TrackEvent =
   | { type: 'BUFFER_ERROR' }
   | { type: 'HTML5_ENDED' }
   | { type: 'WEBAUDIO_ENDED' }
-  | { type: 'URL_RESOLVED'; url: string };
+  | { type: 'URL_RESOLVED'; url: string }
+  | { type: 'SCHEDULE_GAPLESS'; when: number }
+  | { type: 'CANCEL_GAPLESS' }
+  | { type: 'LOOKAHEAD_REACHED' };
 
 // ---- Machine ---------------------------------------------------------------
 
@@ -64,6 +67,26 @@ export function createTrackMachine(initialContext: TrackContext) {
     types: {
       context: {} as TrackContext,
       events: {} as TrackEvent,
+    },
+    guards: {
+      canPlayWebAudio: () => false,
+    },
+    actions: {
+      playHtml5: () => {},
+      startSourceNode: () => {},
+      startScheduledSourceNode: () => {},
+      startProgressLoop: () => {},
+      pauseHtml5: () => {},
+      freezePausedTime: () => {},
+      stopSourceNode: () => {},
+      disconnectGain: () => {},
+      stopProgressLoop: () => {},
+      reportProgress: () => {},
+      seekHtml5: () => {},
+      seekWebAudio: () => {},
+      resetHtml5Element: () => {},
+      resetTiming: () => {},
+      notifyTrackEnded: () => {},
     },
   }).createMachine({
     id: 'track',
@@ -76,18 +99,67 @@ export function createTrackMachine(initialContext: TrackContext) {
       // -----------------------------------------------------------------
       idle: {
         on: {
-          HTML5_ENDED: {},
-          PLAY: {
-            target: 'html5',
-            actions: assign({ isPlaying: () => true }),
+          HTML5_ENDED: {
+            actions: ['notifyTrackEnded'],
           },
+          DEACTIVATE: {
+            actions: [
+              'resetHtml5Element',
+              'resetTiming',
+              'stopProgressLoop',
+              assign({ scheduledStartContextTime: () => null, notifiedLookahead: () => false }),
+            ],
+          },
+          ACTIVATE: {
+            actions: [
+              'resetTiming',
+              'resetHtml5Element',
+              assign({ scheduledStartContextTime: () => null, notifiedLookahead: () => false }),
+            ],
+          },
+          PLAY: [
+            {
+              guard: 'canPlayWebAudio',
+              target: 'webaudio',
+              actions: [
+                assign({
+                  isPlaying: () => true,
+                  webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
+                  playbackType: () => 'WEBAUDIO' as PlaybackType,
+                }),
+                'startSourceNode',
+                'startProgressLoop',
+              ],
+            },
+            {
+              target: 'html5',
+              actions: [assign({ isPlaying: () => true }), 'playHtml5', 'startProgressLoop'],
+            },
+          ],
           PLAY_WEBAUDIO: {
             target: 'webaudio',
-            actions: assign({
-              isPlaying: () => true,
-              webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
-              playbackType: () => 'WEBAUDIO' as PlaybackType,
-            }),
+            actions: [
+              assign({
+                isPlaying: () => true,
+                webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
+                playbackType: () => 'WEBAUDIO' as PlaybackType,
+              }),
+              'startSourceNode',
+              'startProgressLoop',
+            ],
+          },
+          SCHEDULE_GAPLESS: {
+            target: 'webaudio',
+            actions: [
+              assign({
+                isPlaying: () => true,
+                webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
+                playbackType: () => 'WEBAUDIO' as PlaybackType,
+                scheduledStartContextTime: ({ event }) =>
+                  (event as { type: 'SCHEDULE_GAPLESS'; when: number }).when,
+              }),
+              'startScheduledSourceNode',
+            ],
           },
           PRELOAD: { target: 'loading' },
           BUFFER_LOADING: {
@@ -113,10 +185,10 @@ export function createTrackMachine(initialContext: TrackContext) {
       html5: {
         on: {
           PAUSE: {
-            actions: assign({ isPlaying: () => false }),
+            actions: [assign({ isPlaying: () => false }), 'pauseHtml5', 'stopProgressLoop', 'reportProgress'],
           },
           PLAY: {
-            actions: assign({ isPlaying: () => true }),
+            actions: [assign({ isPlaying: () => true }), 'playHtml5', 'startProgressLoop'],
           },
           BUFFER_LOADING: {
             actions: assign({ webAudioLoadingState: () => 'LOADING' as WebAudioLoadingState }),
@@ -142,13 +214,31 @@ export function createTrackMachine(initialContext: TrackContext) {
             }),
           },
           SEEK: {
-            actions: assign({
-              pausedAtTrackTime: ({ event }) => (event as { type: 'SEEK'; time: number }).time,
-            }),
+            actions: [
+              'seekHtml5',
+              'reportProgress',
+            ],
+          },
+          LOOKAHEAD_REACHED: {
+            actions: assign({ notifiedLookahead: () => true }),
           },
           HTML5_ENDED: {
             target: 'idle',
-            actions: assign({ isPlaying: () => false }),
+            actions: [assign({ isPlaying: () => false }), 'stopProgressLoop', 'notifyTrackEnded'],
+          },
+          ACTIVATE: {
+            target: 'idle',
+            actions: [
+              assign({
+                isPlaying: () => false,
+                scheduledStartContextTime: () => null,
+                notifiedLookahead: () => false,
+              }),
+              'pauseHtml5',
+              'stopProgressLoop',
+              'resetTiming',
+              'resetHtml5Element',
+            ],
           },
           URL_RESOLVED: {
             actions: assign({
@@ -157,7 +247,7 @@ export function createTrackMachine(initialContext: TrackContext) {
           },
           DEACTIVATE: {
             target: 'idle',
-            actions: assign({ isPlaying: () => false }),
+            actions: [assign({ isPlaying: () => false }), 'pauseHtml5', 'resetHtml5Element', 'resetTiming', 'stopProgressLoop'],
           },
         },
       },
@@ -182,21 +272,65 @@ export function createTrackMachine(initialContext: TrackContext) {
               webAudioLoadingState: () => 'ERROR' as WebAudioLoadingState,
             }),
           },
-          PLAY: {
-            target: 'html5',
-            actions: assign({ isPlaying: () => true }),
-          },
+          PLAY: [
+            {
+              guard: 'canPlayWebAudio',
+              target: 'webaudio',
+              actions: [
+                assign({
+                  isPlaying: () => true,
+                  webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
+                  playbackType: () => 'WEBAUDIO' as PlaybackType,
+                }),
+                'startSourceNode',
+                'startProgressLoop',
+              ],
+            },
+            {
+              target: 'html5',
+              actions: [assign({ isPlaying: () => true }), 'playHtml5', 'startProgressLoop'],
+            },
+          ],
           PLAY_WEBAUDIO: {
             target: 'webaudio',
-            actions: assign({
-              isPlaying: () => true,
-              webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
-              playbackType: () => 'WEBAUDIO' as PlaybackType,
-            }),
+            actions: [
+              assign({
+                isPlaying: () => true,
+                webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
+                playbackType: () => 'WEBAUDIO' as PlaybackType,
+              }),
+              'startSourceNode',
+              'startProgressLoop',
+            ],
+          },
+          SCHEDULE_GAPLESS: {
+            target: 'webaudio',
+            actions: [
+              assign({
+                isPlaying: () => true,
+                webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
+                playbackType: () => 'WEBAUDIO' as PlaybackType,
+                scheduledStartContextTime: ({ event }) =>
+                  (event as { type: 'SCHEDULE_GAPLESS'; when: number }).when,
+              }),
+              'startScheduledSourceNode',
+            ],
+          },
+          ACTIVATE: {
+            target: 'idle',
+            actions: [
+              assign({
+                isPlaying: () => false,
+                scheduledStartContextTime: () => null,
+                notifiedLookahead: () => false,
+              }),
+              'resetTiming',
+              'resetHtml5Element',
+            ],
           },
           DEACTIVATE: {
             target: 'idle',
-            actions: assign({ isPlaying: () => false }),
+            actions: [assign({ isPlaying: () => false }), 'resetTiming'],
           },
           URL_RESOLVED: {
             actions: assign({
@@ -212,11 +346,24 @@ export function createTrackMachine(initialContext: TrackContext) {
       webaudio: {
         on: {
           PAUSE: {
-            actions: assign({ isPlaying: () => false }),
+            actions: [
+              assign({ isPlaying: () => false }),
+              'freezePausedTime',
+              'stopSourceNode',
+              'disconnectGain',
+              'stopProgressLoop',
+              'reportProgress',
+            ],
           },
-          PLAY: {
-            actions: assign({ isPlaying: () => true }),
-          },
+          PLAY: [
+            {
+              guard: 'canPlayWebAudio',
+              actions: [assign({ isPlaying: () => true }), 'startSourceNode', 'startProgressLoop'],
+            },
+            {
+              actions: assign({ isPlaying: () => true }),
+            },
+          ],
           PLAY_WEBAUDIO: {
             actions: assign({
               isPlaying: () => true,
@@ -224,19 +371,64 @@ export function createTrackMachine(initialContext: TrackContext) {
             }),
           },
           SEEK: {
-            actions: assign({
-              pausedAtTrackTime: ({ event }) => (event as { type: 'SEEK'; time: number }).time,
-            }),
+            actions: [
+              assign({ scheduledStartContextTime: () => null }),
+              'seekWebAudio',
+              'reportProgress',
+            ],
           },
           SET_VOLUME: {},
+          CANCEL_GAPLESS: {
+            target: 'idle',
+            actions: [
+              assign({
+                isPlaying: () => false,
+                scheduledStartContextTime: () => null,
+                notifiedLookahead: () => false,
+              }),
+              'stopSourceNode',
+              'disconnectGain',
+              'stopProgressLoop',
+              'resetTiming',
+            ],
+          },
+          LOOKAHEAD_REACHED: {
+            actions: assign({ notifiedLookahead: () => true }),
+          },
           WEBAUDIO_ENDED: {
             target: 'idle',
-            actions: assign({ isPlaying: () => false }),
+            actions: [assign({ isPlaying: () => false }), 'stopProgressLoop', 'notifyTrackEnded'],
+          },
+          ACTIVATE: {
+            target: 'idle',
+            actions: [
+              assign({
+                isPlaying: () => false,
+                scheduledStartContextTime: () => null,
+                notifiedLookahead: () => false,
+              }),
+              'stopSourceNode',
+              'disconnectGain',
+              'stopProgressLoop',
+              'resetTiming',
+              'resetHtml5Element',
+            ],
           },
           // Bug #3 fix: DEACTIVATE from webaudio → idle (was staying in webaudio)
           DEACTIVATE: {
             target: 'idle',
-            actions: assign({ isPlaying: () => false }),
+            actions: [
+              assign({
+                isPlaying: () => false,
+                scheduledStartContextTime: () => null,
+                notifiedLookahead: () => false,
+              }),
+              'stopSourceNode',
+              'disconnectGain',
+              'resetTiming',
+              'resetHtml5Element',
+              'stopProgressLoop',
+            ],
           },
         },
       },
