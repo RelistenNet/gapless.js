@@ -17,6 +17,7 @@ function makeCtx(overrides: Partial<TrackContext> = {}): TrackContext {
     isPlaying: false,
     scheduledStartContextTime: null,
     notifiedLookahead: false,
+    fetchDecodeRef: null,
     ...overrides,
   };
 }
@@ -373,6 +374,53 @@ describe('TrackMachine', () => {
       // Still available for Web Audio
       a.send({ type: 'PLAY_WEBAUDIO' });
       expect(a.getSnapshot().value).toBe('webaudio');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // START_FETCH event
+  // ---------------------------------------------------------------------------
+  describe('START_FETCH event', () => {
+    it('sets webAudioLoadingState to LOADING and spawns fetchDecodeRef', () => {
+      const a = actorAt(makeCtx());
+      a.send({ type: 'START_FETCH' });
+      const snap = a.getSnapshot();
+      expect(snap.context.webAudioLoadingState).toBe('LOADING');
+      expect(snap.context.fetchDecodeRef).not.toBeNull();
+    });
+
+    it('guard prevents double-spawn when already LOADING', () => {
+      const a = actorAt(makeCtx());
+      a.send({ type: 'START_FETCH' });
+      const ref1 = a.getSnapshot().context.fetchDecodeRef;
+      // Send START_FETCH again — guard should prevent it
+      a.send({ type: 'START_FETCH' });
+      const ref2 = a.getSnapshot().context.fetchDecodeRef;
+      expect(ref1).toBe(ref2);
+    });
+
+    it('guard prevents spawn when webAudioLoadingState is not NONE', () => {
+      const a = actorAt(makeCtx({ webAudioLoadingState: 'LOADED' }));
+      a.send({ type: 'START_FETCH' });
+      expect(a.getSnapshot().context.fetchDecodeRef).toBeNull();
+    });
+
+    it('START_FETCH works from html5 state', () => {
+      const a = actorAt(makeCtx(), 'html5');
+      a.send({ type: 'START_FETCH' });
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADING');
+      expect(a.getSnapshot().context.fetchDecodeRef).not.toBeNull();
+      // Still in html5
+      expect(a.getSnapshot().value).toBe('html5');
+    });
+
+    it('START_FETCH works from loading state', () => {
+      const a = actorAt(makeCtx(), 'loading');
+      a.send({ type: 'START_FETCH' });
+      expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADING');
+      expect(a.getSnapshot().context.fetchDecodeRef).not.toBeNull();
+      // Still in loading
+      expect(a.getSnapshot().value).toBe('loading');
     });
   });
 });

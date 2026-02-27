@@ -55,6 +55,40 @@ export function createQueueMachine(initialContext: QueueContext) {
         !!(event as { type: 'GOTO'; playImmediately?: boolean }).playImmediately,
     },
     actions: {
+      // --- named assign actions (avoids mixing inline assign with custom actions) ---
+      incrementTrackCount: assign({
+        trackCount: ({ context }) => context.trackCount + 1,
+      }),
+      decrementTrackCount: assign({
+        trackCount: ({ context }) => Math.max(0, context.trackCount - 1),
+        currentTrackIndex: ({ context, event }) => {
+          const e = event as { type: 'REMOVE_TRACK'; index: number };
+          if (e.index < context.currentTrackIndex) {
+            return Math.max(0, context.currentTrackIndex - 1);
+          }
+          return context.currentTrackIndex;
+        },
+      }),
+      gotoTrackIndex: assign({
+        currentTrackIndex: ({ event }) =>
+          (event as { type: 'GOTO'; index: number }).index,
+      }),
+      advanceToNextTrack: assign({
+        currentTrackIndex: ({ context }) => {
+          const next = context.currentTrackIndex + 1;
+          return next < context.trackCount ? next : context.currentTrackIndex;
+        },
+      }),
+      goToPreviousTrack: assign({
+        currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
+      }),
+      advanceOnTrackEnd: assign({
+        currentTrackIndex: ({ context }) => context.currentTrackIndex + 1,
+      }),
+      resetToFirstTrack: assign({
+        currentTrackIndex: () => 0,
+      }),
+      // --- side-effect actions (no-op defaults, provided by Queue.ts) ---
       deactivateCurrent: () => {},
       deactivateEndedTrack: () => {},
       activateAndPlayCurrent: () => {},
@@ -82,19 +116,10 @@ export function createQueueMachine(initialContext: QueueContext) {
     // Global handlers — shared across all states
     on: {
       ADD_TRACK: {
-        actions: assign({ trackCount: ({ context }) => context.trackCount + 1 }),
+        actions: 'incrementTrackCount',
       },
       REMOVE_TRACK: {
-        actions: assign({
-          trackCount: ({ context }) => Math.max(0, context.trackCount - 1),
-          currentTrackIndex: ({ context, event }) => {
-            const e = event as { type: 'REMOVE_TRACK'; index: number };
-            if (e.index < context.currentTrackIndex) {
-              return Math.max(0, context.currentTrackIndex - 1);
-            }
-            return context.currentTrackIndex;
-          },
-        }),
+        actions: 'decrementTrackCount',
       },
     },
 
@@ -115,10 +140,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                assign({
-                  currentTrackIndex: ({ event }) =>
-                    (event as { type: 'GOTO'; index: number }).index,
-                }),
+                'gotoTrackIndex',
                 'activateAndPlayCurrent',
                 'notifyStartNewTrack',
                 'updateMediaSessionMetadata',
@@ -130,10 +152,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                assign({
-                  currentTrackIndex: ({ event }) =>
-                    (event as { type: 'GOTO'; index: number }).index,
-                }),
+                'gotoTrackIndex',
                 'seekCurrentToZero',
                 'preloadAhead',
               ],
@@ -162,12 +181,7 @@ export function createQueueMachine(initialContext: QueueContext) {
             actions: [
               'deactivateCurrent',
               'cancelAllGapless',
-              assign({
-                currentTrackIndex: ({ context }) => {
-                  const next = context.currentTrackIndex + 1;
-                  return next < context.trackCount ? next : context.currentTrackIndex;
-                },
-              }),
+              'advanceToNextTrack',
               'activateAndPlayCurrent',
               'notifyStartNewTrack',
               'notifyPlayNextTrack',
@@ -179,9 +193,7 @@ export function createQueueMachine(initialContext: QueueContext) {
             actions: [
               'deactivateCurrent',
               'cancelAllGapless',
-              assign({
-                currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
-              }),
+              'goToPreviousTrack',
               'activateAndPlayCurrent',
               'notifyStartNewTrack',
               'notifyPlayPreviousTrack',
@@ -195,10 +207,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                assign({
-                  currentTrackIndex: ({ event }) =>
-                    (event as { type: 'GOTO'; index: number }).index,
-                }),
+                'gotoTrackIndex',
                 'activateAndPlayCurrent',
                 'notifyStartNewTrack',
                 'updateMediaSessionMetadata',
@@ -209,10 +218,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                assign({
-                  currentTrackIndex: ({ event }) =>
-                    (event as { type: 'GOTO'; index: number }).index,
-                }),
+                'gotoTrackIndex',
                 'seekCurrentToZero',
                 'preloadAhead',
               ],
@@ -227,9 +233,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               target: 'playing',
               actions: [
                 'deactivateEndedTrack',
-                assign({
-                  currentTrackIndex: ({ context }) => context.currentTrackIndex + 1,
-                }),
+                'advanceOnTrackEnd',
                 'playOrContinueGapless',
                 'notifyStartNewTrack',
                 'notifyPlayNextTrack',
@@ -265,12 +269,7 @@ export function createQueueMachine(initialContext: QueueContext) {
             actions: [
               'deactivateCurrent',
               'cancelAllGapless',
-              assign({
-                currentTrackIndex: ({ context }) => {
-                  const next = context.currentTrackIndex + 1;
-                  return next < context.trackCount ? next : context.currentTrackIndex;
-                },
-              }),
+              'advanceToNextTrack',
               'activateAndPlayCurrent',
               'notifyStartNewTrack',
               'notifyPlayNextTrack',
@@ -282,9 +281,7 @@ export function createQueueMachine(initialContext: QueueContext) {
             actions: [
               'deactivateCurrent',
               'cancelAllGapless',
-              assign({
-                currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
-              }),
+              'goToPreviousTrack',
               'activateAndPlayCurrent',
               'notifyStartNewTrack',
               'notifyPlayPreviousTrack',
@@ -299,10 +296,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                assign({
-                  currentTrackIndex: ({ event }) =>
-                    (event as { type: 'GOTO'; index: number }).index,
-                }),
+                'gotoTrackIndex',
                 'activateAndPlayCurrent',
                 'notifyStartNewTrack',
                 'updateMediaSessionMetadata',
@@ -313,10 +307,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                assign({
-                  currentTrackIndex: ({ event }) =>
-                    (event as { type: 'GOTO'; index: number }).index,
-                }),
+                'gotoTrackIndex',
                 'seekCurrentToZero',
                 'preloadAhead',
               ],
@@ -331,9 +322,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               target: 'paused',
               actions: [
                 'deactivateEndedTrack',
-                assign({
-                  currentTrackIndex: ({ context }) => context.currentTrackIndex + 1,
-                }),
+                'advanceOnTrackEnd',
                 'notifyStartNewTrack',
                 'updateMediaSessionMetadata',
               ],
@@ -357,7 +346,7 @@ export function createQueueMachine(initialContext: QueueContext) {
           PLAY: {
             target: 'playing',
             actions: [
-              assign({ currentTrackIndex: () => 0 }),
+              'resetToFirstTrack',
               'playCurrent',
               'updateMediaSessionMetadata',
               'preloadAhead',
@@ -371,10 +360,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                assign({
-                  currentTrackIndex: ({ event }) =>
-                    (event as { type: 'GOTO'; index: number }).index,
-                }),
+                'gotoTrackIndex',
                 'activateAndPlayCurrent',
                 'notifyStartNewTrack',
                 'updateMediaSessionMetadata',
@@ -386,10 +372,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                assign({
-                  currentTrackIndex: ({ event }) =>
-                    (event as { type: 'GOTO'; index: number }).index,
-                }),
+                'gotoTrackIndex',
                 'seekCurrentToZero',
                 'preloadAhead',
               ],

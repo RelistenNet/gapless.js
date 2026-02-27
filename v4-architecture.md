@@ -2,7 +2,7 @@
 
 ## Overview
 
-gapless.js is a browser audio playback library that achieves sample-accurate gapless transitions between tracks. It uses a dual-backend architecture: HTML5 Audio for broad compatibility and Web Audio API for gapless scheduling. State is managed by [xstate v5](https://stately.ai/docs/xstate) finite state machines at both the queue and per-track level.
+gapless.js is a browser audio playback library that achieves sample-accurate gapless transitions between tracks. It uses a dual-backend architecture: HTML5 Audio for broad compatibility and Web Audio API for gapless scheduling. State is managed by [xstate v5](https://stately.ai/docs/xstate) finite state machines at both the queue and per-track level, with a child actor for the fetch/decode pipeline.
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -23,6 +23,11 @@ gapless.js is a browser audio playback library that achieves sample-accurate gap
   │ Track 0 │     │ Track 1 │  ...
   │ ┌─────┐ │     │ ┌─────┐ │
   │ │ FSM │ │     │ │ FSM │ │   ◄── TrackMachine (per-track)
+  │ └──┬──┘ │     │ └──┬──┘ │
+  │    │    │     │    │    │
+  │ ┌──▼──┐ │     │ ┌──▼──┐ │
+  │ │fetch│ │     │ │fetch│ │   ◄── FetchDecodeMachine (child actor)
+  │ │decode│ │     │ │decode│ │
   │ └─────┘ │     │ └─────┘ │
   │ <audio> │     │ <audio> │
   │ + nodes │     │ + nodes │   ◄── AudioBufferSourceNode, GainNode
@@ -281,8 +286,44 @@ Each Track has its own machine managing its playback backend and loading state.
 - `BUFFER_READY` in `html5` — stays in `html5`, just marks the buffer as loaded. The switchover to `webaudio` only happens via an explicit `PLAY_WEBAUDIO`.
 - `BUFFER_READY` in `loading` — stays in `loading`. The track waits for the Queue to decide when to play it.
 - `DEACTIVATE` from `webaudio` — goes to `idle` (not `loading`), since the track is being swapped out.
+- `START_FETCH` — global event (handled in any state). When `webAudioLoadingState` is `NONE` and no fetch is in progress, spawns a `FetchDecodeMachine` child actor and sets `webAudioLoadingState` to `LOADING`.
 
-Context: `{ trackUrl, resolvedUrl, skipHEAD, playbackType, webAudioLoadingState, webAudioStartedAt, pausedAtTrackTime, isPlaying }`
+Context: `{ trackUrl, resolvedUrl, skipHEAD, playbackType, webAudioLoadingState, webAudioStartedAt, pausedAtTrackTime, isPlaying, fetchDecodeRef }`
+
+### FetchDecodeMachine
+
+Child actor spawned by TrackMachine when `START_FETCH` fires. Manages the async fetch-and-decode pipeline as a series of invoked promises.
+
+```
+  resolvingUrl ──► fetching ──► decoding ──► done
+       │               │            │
+       │ (HEAD fails)  │            │
+       └──► fetching   └──► error   └──► error
+```
+
+**States:**
+
+| State | Meaning |
+|---|---|
+| `resolvingUrl` | HEAD request to resolve redirects. Skipped if `skipHEAD` is true. |
+| `fetching` | GET request for the audio data. |
+| `decoding` | `AudioContext.decodeAudioData()` on the ArrayBuffer. |
+| `done` | Buffer decoded successfully (final). |
+| `error` | Fetch or decode failed (final). |
+
+**Parent communication via `sendParent`:**
+
+| Event | When |
+|---|---|
+| `URL_RESOLVED` | HEAD request resolved a redirect URL. |
+| `BUFFER_READY` | Decode succeeded — PCM buffer is available. |
+| `BUFFER_ERROR` | Fetch or decode failed. |
+
+xstate v5 automatically passes an `AbortSignal` to `fromPromise` actors, so when the parent stops (e.g., `destroy()`), in-flight fetches are aborted for free.
+
+Context: `{ trackUrl, resolvedUrl, skipHEAD }`
+
+Promise implementations (`resolveUrl`, `fetchAudio`, `decodeAudio`) are no-op defaults in the machine definition — `Track.ts` provides real implementations via `.provide()` at spawn time.
 
 ---
 
@@ -292,7 +333,7 @@ The core idea: schedule the next track's `AudioBufferSourceNode.start(when)` at 
 
 ### Step by step
 
-1. **Preload**: When a track starts playing, the Queue calls `_preloadAhead()` to begin fetching and decoding the next 2 tracks via `fetch()` → `AudioContext.decodeAudioData()`.
+1. **Preload**: When a track starts playing, the Queue calls `_preloadAhead()` to begin fetching and decoding the next 2 tracks. Each track spawns a `FetchDecodeMachine` child actor which runs: resolve URL → fetch → decode.
 
 2. **Schedule**: When the current track is within 5 seconds of its end and the next track's buffer is decoded, `_tryScheduleGapless()` computes the exact end time:
    ```
@@ -328,6 +369,12 @@ The `play()` method resolves which backend to use:
 2. If buffer is decoded and context exists → switch to Web Audio
 3. Otherwise → play via HTML5 `<audio>` element
 
+### Fetch/Decode Pipeline
+
+The fetch/decode pipeline is modeled as a `FetchDecodeMachine` child actor, spawned by the TrackMachine via `START_FETCH`. The pipeline runs through: HEAD request (resolve redirects) → GET (fetch audio data) → `decodeAudioData()` (decode to PCM). Each step is an invoked promise, and xstate v5 provides automatic abort-on-destroy via `AbortSignal`.
+
+This replaces the previous approach of manual `AbortController` and `_startLoad()` method — all pipeline state is now managed declaratively by the machine.
+
 ### AudioContext — Singleton
 
 All tracks share a single `AudioContext` (created lazily on first user gesture via `resumeAudioContext()`). This is essential — `AudioContext.currentTime` must be a shared clock for gapless scheduling to work.
@@ -342,6 +389,8 @@ const ctx = getAudioContext();
 await resumeAudioContext();
 ```
 
+The `AudioContext` is **not created at Queue construction time**. Browsers block `new AudioContext()` before a user gesture and log a warning. `getAudioContext()` returns `null` until `resumeAudioContext()` has been called. All WebAudio code paths guard `if (!this.ctx) return` and silently fall back to HTML5 until the context exists.
+
 ### Media Session
 
 The Queue automatically integrates with the [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API) for OS-level playback controls (lock screen, notification shade, media keys). Track metadata (`title`, `artist`, `album`, `artwork`) is forwarded to the OS when tracks change.
@@ -352,6 +401,31 @@ The Queue automatically integrates with the [Media Session API](https://develope
 - When a track starts playing, the next 2 unloaded tracks are fetched and decoded sequentially.
 - `onTrackBufferReady` cascades: when track N finishes decoding, track N+1 starts.
 - The progress loop provides a second trigger at `GAPLESS_SCHEDULE_LOOKAHEAD = 5` seconds before track end, ensuring gapless scheduling happens even if preloading completed long ago.
+
+### Pause/Resume on WebAudio Path
+
+`AudioBufferSourceNode` is one-shot — it cannot be paused and restarted. On pause:
+- Record `pausedAtTrackTime = currentTime`
+- `sourceNode.stop()` + `disconnect()`
+- Set `_webAudioPaused = true`
+
+On resume:
+- Create a fresh `AudioBufferSourceNode`
+- `sourceNode.start(0, pausedAtTrackTime)`
+- `webAudioStartedAt = ctx.currentTime - pausedAtTrackTime`
+
+### `currentTime` Formula
+
+```
+WebAudio playing:  ctx.currentTime - webAudioStartedAt
+WebAudio paused:   pausedAtTrackTime  (frozen)
+HTML5:             audio.currentTime
+```
+
+### `previous()` Behaviour
+
+- If `currentTime > 8s` → seek to 0 and keep playing (restart current track)
+- Otherwise → deactivate current, go to previous track, play
 
 ---
 
@@ -366,7 +440,155 @@ src/
   machines/
     queue.machine.ts          QueueMachine (xstate v5)
     track.machine.ts          TrackMachine (xstate v5)
+    fetchDecode.machine.ts    FetchDecodeMachine (child actor — fetch/decode pipeline)
   utils/
     audioContext.ts            Singleton AudioContext manager
     mediaSession.ts            Media Session API integration
 ```
+
+---
+
+## Development
+
+```bash
+pnpm install
+pnpm build          # produces dist/index.mjs, dist/cjs/index.cjs, dist/index.d.mts
+pnpm test           # vitest run (182 tests, ~500ms)
+pnpm test:watch     # vitest watch mode
+pnpm dev            # node dev-server.mjs → http://localhost:8765
+```
+
+### Dev server (`dev-server.mjs`)
+
+Serves three things on port 8765:
+
+| Path | Purpose |
+|---|---|
+| `/` | Static files from project root (`index.html` + `dist/`) |
+| `/proxy?url=<encoded>` | CORS proxy — required for `fetch()` + `decodeAudioData` on cross-origin audio (e.g. `audio.relisten.net` has no CORS headers) |
+| `/esr` | SSE hot-reload — browser reloads when `dist/*.mjs` or `index.html` changes |
+
+Workflow: `pnpm dev` (server) in one terminal, `pnpm build` (or `pnpm build --watch`) in another. The browser reloads automatically after each build.
+
+### Test structure
+
+```
+tests/
+  setup.ts                        Mock AudioContext, GainNode, BufferSourceNode,
+                                  HTMLAudioElement, fetch. Installed globally via
+                                  vitest.config.ts setupFiles. Each test gets a
+                                  fresh MockAudioContext via _setAudioContext().
+
+  unit/
+    queue.machine.test.ts         Pure QueueMachine transition tests (no DOM)
+    track.machine.test.ts         Pure TrackMachine transition tests (no DOM)
+    fetchDecode.machine.test.ts   FetchDecodeMachine transition + sendParent tests
+    timing.test.ts                Track currentTime math, scheduleGaplessStart,
+                                  pause/resume, seek — uses controllable mock clock
+    queue.test.ts                 Queue class integration tests — full public API,
+                                  callbacks, preloading, gapless scheduling
+```
+
+---
+
+## Bug History
+
+All bugs below were discovered during the v3→v4 development and are covered by regression tests.
+
+---
+
+### 1. `TRACK_ENDED` not handled in `paused` queue state
+
+**Symptom:** When a track ended naturally while the queue was paused (user paused near end, audio buffer drained), the `TRACK_ENDED` event was silently dropped by the machine. The queue stayed on the finished track at index 0. Pressing Play replayed the ended track instead of starting the next one.
+
+**Root cause:** The `paused` state had no `TRACK_ENDED` handler, so the event was silently ignored.
+
+**Fix:** `TRACK_ENDED` in `paused` → advance `currentTrackIndex`, stay `paused`. Last track → go to `ended`. `Queue.onTrackEnded` fires `onStartNewTrack` (UI update) but does NOT call `play()` — user explicitly paused and must press Play.
+
+**Tests:** `queue.machine.test.ts` — "TRACK_ENDED in paused stays paused and advances index", "does not auto-play", "on last track goes to ended". `queue.test.ts` — 6 integration tests in "Queue TRACK_ENDED while paused".
+
+---
+
+### 2. Spurious `pause()` from MediaSession on natural track end
+
+**Symptom:** The queue transitioned to `paused` state at the exact moment a track ended naturally, before `onended` fired. The next track never auto-started.
+
+**Root cause:** Chrome fires the MediaSession `pause` action when the HTML5 audio element reaches end-of-track (before `ended`). The unguarded `onPause: () => this.pause()` handler called `Queue.pause()` unconditionally, sending `'PAUSE'` to the queue machine. When `onended` subsequently fired, `TRACK_ENDED` was handled correctly by the `paused` state — but the queue stayed paused instead of playing.
+
+**Fix:** Guard the MediaSession `pause` handler: `onPause: () => { if (this._service.state.value === 'playing') this.pause(); }`. Natural end-of-track arrives while the queue is transitioning from `playing` (Chrome fires it before `onended`), so the guard correctly ignores it.
+
+**Tests:** `queue.test.ts` — "calling pause() while already paused does not corrupt state", "TRACK_ENDED after a spurious pause still advances to next track".
+
+---
+
+### 3. `resumeAudioContext().then()` race causing spurious pause on Play button
+
+**Symptom:** On some page loads, clicking the Play button immediately paused instead of playing. Required a second click to actually start playback.
+
+**Root cause:** The test page called `resumeAudioContext().then(() => queue.play())` on startup AND `resumeAudioContext().then(() => queue.togglePlayPause())` on button click. `resumeAudioContext()` always returns a `Promise` (even when the context is already running), so `then()` always runs in a microtask. If the startup and button-click promises were both queued, the startup `.then()` ran first (setting queue to `playing`), then the button `.then()` ran and called `togglePlayPause()` — which saw `playing` and called `pause()`.
+
+**Fix (test page):** Track whether the AudioContext has been unlocked. After the first gesture, call queue methods synchronously — no `await`, no microtask gap. Removed the startup auto-play attempt entirely (browser policy blocks it without a gesture anyway).
+
+---
+
+### 4. `AudioContext` created before user gesture
+
+**Symptom:** Browser console warning: *"An AudioContext was prevented from starting automatically. It must be created or resumed after a user gesture on the page."*
+
+**Root cause:** `getAudioContext()` called `new AudioContext()` lazily on first access. This happened at `Queue` construction time (via `Track` constructors), before any user gesture.
+
+**Fix:** Split responsibilities:
+- `getAudioContext()` returns `null` if `resumeAudioContext()` has never been called (no `new AudioContext()`)
+- `resumeAudioContext()` creates the context on first call (must be from a user gesture), then resumes it if suspended
+- `Track.ctx` is a lazy getter — checks `getAudioContext()` each time and creates the `GainNode` on first non-null access
+- All WebAudio code paths already guard `if (!this.ctx) return`, so they silently fall back to HTML5 until the context exists
+
+---
+
+### 5. `scheduleGaplessStart` sent wrong machine event (`'PLAY'` instead of `'PLAY_WEBAUDIO'`)
+
+**Symptom:** After a gapless transition, the next track played audio correctly (WebAudio source node was running) but `Track.currentTime` returned 0 and never advanced. Progress bar frozen.
+
+**Root cause:** `scheduleGaplessStart` sent `this.service.send('PLAY')` instead of `'PLAY_WEBAUDIO'`. The `'PLAY'` event transitions the machine to `html5` state. In `html5` state, `_isUsingWebAudio` returns false, so `currentTime` read from `audio.currentTime` (the HTML5 element, which was at 0 since it was never used for this track).
+
+**Fix:** `scheduleGaplessStart` sends `'PLAY_WEBAUDIO'`.
+
+**Tests:** `timing.test.ts` — "puts track machine into webaudio state (not html5)", "currentTime uses WebAudio clock after scheduleGaplessStart", "currentTime does NOT read from stale audio.currentTime".
+
+---
+
+### 6. `scheduleGaplessStart` never started the progress loop
+
+**Symptom:** Companion to bug #5. Even after fixing the machine state, `onProgress` was never called for gapless-started tracks. The "Now Playing" title and timestamp stayed frozen on the previous track.
+
+**Root cause:** `scheduleGaplessStart` armed the WebAudio node and updated machine state, but did not call `_startProgressLoop()`. Separately, `Queue.onTrackEnded`'s gapless branch (when `_scheduledIndices.has(cur.index)`) called `cur.play()` for non-scheduled tracks but had no equivalent for scheduled ones.
+
+**Fix:** `Queue.onTrackEnded` gapless branch calls `cur.startProgressLoop()` (renamed from private `_startProgressLoop` to allow Queue to call it). The progress loop then drives `onProgress` as normal.
+
+**Tests:** `queue.test.ts` — "startProgressLoop() is called on the next track after a gapless transition". `timing.test.ts` — "startProgressLoop() triggers onProgress callback".
+
+---
+
+### 7. `PLAY_WEBAUDIO` silently dropped in `webaudio` machine state → `isPlaying` never true
+
+**Symptom:** After a gapless transition where the next track's buffer had already finished decoding (fast network / short track), `onProgress` still never fired even with the progress loop fix in place. The loop started but exited immediately.
+
+**Root cause:** The progress loop exits when `!this.isPlaying`. `isPlaying` is `this.service.state.context.isPlaying`. The sequence was:
+
+1. Track preloads: `idle` → `loading` (via `PRELOAD`)
+2. Buffer decode completes: `loading` → `webaudio` (via `BUFFER_READY`) — `isPlaying` stays `false` (track is decoded but not yet audible)
+3. `scheduleGaplessStart` fires: sends `'PLAY_WEBAUDIO'` — but the machine is already in `webaudio` state and had **no `PLAY_WEBAUDIO` handler**. Event silently dropped. `isPlaying` remains `false`.
+4. `startProgressLoop` runs: checks `!this.isPlaying` → `true` → exits immediately. No progress.
+
+**Fix:** Add `PLAY_WEBAUDIO` handler in `webaudio` state that sets `isPlaying: true`. This correctly represents the moment `scheduleGaplessStart` arms the node and it will imminently produce sound.
+
+**Tests:** `track.machine.test.ts` — "PLAY_WEBAUDIO in webaudio sets isPlaying true (gapless path)", "PLAY_WEBAUDIO was silently dropped in webaudio state before fix (regression guard)". `timing.test.ts` — "isPlaying is true after scheduleGaplessStart even when track was in webaudio state from BUFFER_READY".
+
+---
+
+## Known Constraints
+
+- **Single AudioContext.** All tracks share one context. This is required for `AudioContext.currentTime` to be a common clock for scheduling.
+- **CORS required for WebAudio.** `fetch()` + `decodeAudioData` requires the audio server to send CORS headers. If it doesn't, use the dev server's `/proxy` endpoint locally, or proxy in production. Without CORS, tracks silently fall back to HTML5 (no gapless).
+- **One-shot source nodes.** `AudioBufferSourceNode` cannot be restarted. Every play/resume/seek creates a new node. The `AudioBuffer` (PCM data) is retained and reused — only the source node is replaced.
+- **Gapless requires buffer before end of current track.** If the next track's buffer is not decoded before the current track ends, the queue falls back to HTML5 `audio.play()` for the next track, which introduces a gap. Preloading starts automatically within the last 25 seconds.

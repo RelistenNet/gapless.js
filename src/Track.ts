@@ -2,9 +2,10 @@
 // Track — owns one audio track's Web Audio nodes and drives TrackMachine
 // ---------------------------------------------------------------------------
 
-import { createActor } from 'xstate';
+import { createActor, fromPromise } from 'xstate';
 import { getAudioContext } from './utils/audioContext';
 import { createTrackMachine } from './machines/track.machine';
+import { fetchDecodeMachine } from './machines/fetchDecode.machine';
 import type { TrackContext } from './machines/track.machine';
 import type { TrackInfo, TrackMetadata, WebAudioLoadingState, PlaybackType } from './types';
 
@@ -30,8 +31,8 @@ export class Track {
   private _trackUrl: string;
   private _resolvedUrl: string;
   private readonly skipHEAD: boolean;
-  private loadedHEAD = false;
-  private abortController: AbortController | null = null;
+  /** Temporary holder between fetch and decode steps (unserializable — stays on Track class). */
+  private _pendingArrayBuffer: ArrayBuffer | null = null;
 
   // ---- HTML5 Audio ---------------------------------------------------------
   readonly audio: HTMLAudioElement;
@@ -109,10 +110,39 @@ export class Track {
       isPlaying: false,
       scheduledStartContextTime: null,
       notifiedLookahead: false,
+      fetchDecodeRef: null,
     };
     const machine = createTrackMachine(initialContext).provide({
       guards: {
         canPlayWebAudio: () => !!(this.ctx && this.audioBuffer && this.gainNode),
+      },
+      actors: {
+        fetchDecode: fetchDecodeMachine.provide({
+          actors: {
+            resolveUrl: fromPromise(async ({ signal }) => {
+              const res = await fetch(this._trackUrl, { method: 'HEAD', signal });
+              if (res.redirected && res.url) {
+                this._resolvedUrl = res.url;
+                this.audio.src = res.url;
+                return res.url;
+              }
+              return null;
+            }),
+            fetchAudio: fromPromise(async ({ input, signal }) => {
+              const { resolvedUrl } = input as { resolvedUrl: string };
+              const res = await fetch(resolvedUrl, { signal });
+              if (!res.ok) throw new Error(`HTTP ${res.status} for ${resolvedUrl}`);
+              this._pendingArrayBuffer = await res.arrayBuffer();
+            }),
+            decodeAudio: fromPromise(async () => {
+              const buf = this._pendingArrayBuffer;
+              this._pendingArrayBuffer = null;
+              if (!buf || !this.ctx) throw new Error('No ArrayBuffer or AudioContext');
+              this.audioBuffer = await this.ctx.decodeAudioData(buf);
+              queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
+            }),
+          },
+        }),
       },
       actions: {
         playHtml5: () => this._playHtml5(),
@@ -197,7 +227,7 @@ export class Track {
       this._actor.send({ type: 'PRELOAD' });
     }
     if (this.audioBuffer || !this.ctx) return;
-    this._startLoad();
+    this._actor.send({ type: 'START_FETCH' });
   }
 
   seekToEnd(secondsFromEnd = 6): void {
@@ -223,11 +253,11 @@ export class Track {
 
   destroy(): void {
     this.deactivate();
-    this.abortController?.abort();
+    this._pendingArrayBuffer = null;
     this.audioBuffer = null;
     this.gainNode?.disconnect();
     this.gainNode = null;
-    this._actor.stop();
+    this._actor.stop(); // Stops spawned fetchDecode child actor, aborting in-flight fetches
   }
 
   // --------------------------------------------------------------------------
@@ -421,69 +451,6 @@ export class Track {
     if (!this.sourceNode) return;
     this._actor.send({ type: 'WEBAUDIO_ENDED' });
   };
-
-  // --------------------------------------------------------------------------
-  // Private: fetch + decode pipeline
-  // --------------------------------------------------------------------------
-
-  private _startLoad(): void {
-    const snap = this._actor.getSnapshot();
-    if (!this.ctx || this.audioBuffer || snap.context.webAudioLoadingState !== 'NONE') {
-      this.queueRef.onDebug(
-        `_startLoad() SKIPPED track=${this.index} hasCtx=${!!this.ctx} hasBuffer=${!!this.audioBuffer} loadingState=${snap.context.webAudioLoadingState}`
-      );
-      return;
-    }
-    this.queueRef.onDebug(
-      `_startLoad() STARTING track=${this.index} url=${this._resolvedUrl.slice(0, 60)}`
-    );
-
-    this._actor.send({ type: 'BUFFER_LOADING' });
-
-    this.abortController = new AbortController();
-
-    const doFetch = (url: string) => {
-      fetch(url, { signal: this.abortController!.signal })
-        .then((res) => {
-          if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-          return res.arrayBuffer();
-        })
-        .then((buf) => this.ctx!.decodeAudioData(buf))
-        .then((audioBuffer) => {
-          this.audioBuffer = audioBuffer;
-          this._actor.send({ type: 'BUFFER_READY' });
-          queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
-        })
-        .catch((err: unknown) => {
-          if (err instanceof Error && err.name === 'AbortError') return;
-          console.error(`gapless.js: decode failed for track ${this.index}`, err);
-          this._actor.send({ type: 'BUFFER_ERROR' });
-        });
-    };
-
-    if (this.skipHEAD || this.loadedHEAD) {
-      doFetch(this._resolvedUrl);
-    } else {
-      fetch(this._trackUrl, {
-        method: 'HEAD',
-        signal: this.abortController.signal,
-      })
-        .then((res) => {
-          if (res.redirected && res.url) {
-            this._resolvedUrl = res.url;
-            this.audio.src = res.url;
-            this._actor.send({ type: 'URL_RESOLVED', url: res.url });
-          }
-          this.loadedHEAD = true;
-          doFetch(this._resolvedUrl);
-        })
-        .catch((err: unknown) => {
-          if (err instanceof Error && err.name === 'AbortError') return;
-          this.loadedHEAD = true;
-          doFetch(this._trackUrl);
-        });
-    }
-  }
 
   // --------------------------------------------------------------------------
   // Private: progress loop (requestAnimationFrame)
