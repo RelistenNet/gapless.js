@@ -8,10 +8,12 @@ import {
   setupMediaSession,
   updateMediaSessionMetadata,
   updateMediaSessionPlaybackState,
+  updateMediaSessionPositionState,
 } from './utils/mediaSession';
 import { createQueueMachine } from './machines/queue.machine';
 import { Track } from './Track';
 import type { TrackQueueRef } from './Track';
+import { throttle } from './utils/throttle';
 import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata } from './types';
 
 /** Maximum number of tracks to preload ahead of the current track. */
@@ -36,6 +38,12 @@ export class Queue implements TrackQueueRef {
 
   /** Track indices for which a gapless start has been pre-scheduled. */
   private _scheduledIndices = new Set<number>();
+
+  private _throttledUpdatePositionState = throttle(
+    (duration: number, currentTime: number) =>
+      updateMediaSessionPositionState(duration, currentTime),
+    1000,
+  );
 
   constructor(options: GaplessOptions = {}) {
     const {
@@ -337,6 +345,9 @@ export class Queue implements TrackQueueRef {
 
   onProgress(info: TrackInfo): void {
     if (info.index !== this._actor.getSnapshot().context.currentTrackIndex) return;
+    if (!isNaN(info.duration)) {
+      this._throttledUpdatePositionState(info.duration, info.currentTime);
+    }
     this._onProgress?.(info);
   }
 

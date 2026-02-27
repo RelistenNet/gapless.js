@@ -53,3 +53,17 @@ export function updateMediaSessionPlaybackState(
   if (!hasMediaSession) return;
   navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
 }
+
+/** Update the OS position/duration display (lock screen scrubber). */
+export function updateMediaSessionPositionState(
+  duration: number,
+  position: number,
+  playbackRate = 1,
+): void {
+  if (!hasMediaSession) return;
+  try {
+    navigator.mediaSession.setPositionState({ duration, position, playbackRate });
+  } catch {
+    // Some browsers throw on invalid values (e.g. NaN duration)
+  }
+}
