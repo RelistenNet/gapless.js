@@ -134,6 +134,10 @@ export function useGapless(options: {
         }
       },
 
+      onQueueStateChange(snapshot) {
+        setQueueSnapshot(snapshot);
+      },
+
       onPlayBlocked() {
         addLog('Autoplay blocked \u2014 click Play', 'warn');
       },

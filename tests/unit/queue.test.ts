@@ -5,9 +5,10 @@
 // Verifies callbacks, state transitions, track management, and preloading.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Queue } from '../../src/Queue';
-import { MockAudioBuffer, MockAudioElement, mockFetchSuccess, mockFetchFailure } from '../setup';
+import type { TrackInfo } from '../../src/types';
+import { MockAudioBuffer, MockAudioElement, advanceTime, mockFetchSuccess, mockFetchFailure } from '../setup';
 
 // Helper: inject a pre-decoded buffer into a track (bypasses fetch pipeline)
 function injectBuffer(queue: Queue, trackIndex: number, duration = 180): void {
@@ -469,6 +470,35 @@ describe('Queue MediaSession pause guard', () => {
     expect(q.isPlaying).toBe(true);
     expect(q.currentTrackIndex).toBe(1);
     expect(internal._tracks[1].audio.play).toHaveBeenCalled();
+  });
+});
+
+describe('Queue media session position updates via onProgress', () => {
+  // The OS media session extrapolates position from the last setPositionState
+  // call. We avoid flushing position on play/pause state changes because any
+  // small mismatch between our position and the OS extrapolation causes a
+  // visible scrubber jump. Instead we rely solely on the throttled (200ms)
+  // position updates from the progress loop during playback, and let the OS
+  // freeze/resume its extrapolated position on pause/play.
+
+  it('onProgress forwards to user callback during playback', () => {
+    const spy = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3'], onProgress: spy });
+    q.play();
+    // Manually fire onProgress like the progress loop would
+    q.onProgress({ index: 0, currentTime: 10, duration: 120 } as TrackInfo);
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ currentTime: 10, duration: 120 }),
+    );
+  });
+
+  it('onProgress ignores reports from non-current tracks', () => {
+    const spy = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onProgress: spy });
+    q.play();
+    // Report from track 1, but current track is 0 — should be ignored
+    q.onProgress({ index: 1, currentTime: 5, duration: 60 } as TrackInfo);
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

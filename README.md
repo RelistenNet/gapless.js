@@ -1,21 +1,25 @@
 # gapless.js
 
-Gapless audio playback for the web. Takes an array of audio tracks and uses HTML5 audio with the Web Audio API to enable seamless, gapless transitions between tracks.
+Gapless audio player for the web. Takes an array of audio tracks and uses HTML5 audio with the Web Audio API to enable seamless, gapless transitions between tracks.
 
-Built for [Relisten.net](https://relisten.net).
+Though the earnest goal is not bundle-size driven, it has only one production dependency (xstate) so it operates in a rigid manner according to a well-designed state machine.
+
+It has a dead simple API and is easy to get up and running.
+
+Built for [Relisten.net](https://relisten.net), where playing back gapless live tracks is paramount.
 
 **[Live Demo](https://gapless.saewitz.com)**
 
 ## Install
 
 ```bash
-pnpm install gapless.js
+pnpm install gapless
 ```
 
 ## Quick Start
 
 ```javascript
-import Queue from 'gapless.js';
+import Queue from 'gapless';
 
 const player = new Queue({
   tracks: [
@@ -137,7 +141,7 @@ v4 is a complete rewrite. The public API has changed:
 
 | v3 | v4 |
 |----|-----|
-| `import GaplessQueue from 'gapless.js'` | `import Queue from 'gapless.js'` (or `import { Queue }`) |
+| `import GaplessQueue from 'gapless.js'` | `import Queue from 'gapless'` (or `import { Queue }`) |
 | `player.playNext()` | `player.next()` |
 | `player.playPrevious()` | `player.previous()` |
 | `player.resetCurrentTrack()` | `player.seek(0)` |
