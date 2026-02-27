@@ -550,6 +550,55 @@ describe('Queue gapless transition progress', () => {
   });
 });
 
+describe('Queue pause after gapless transition reports correct state', () => {
+  // Bug: after a gapless (WebAudio) transition, pausing the new track would
+  // fire reportProgress with stale getSnapshot() data (isPlaying: true),
+  // causing consumers to think the track was still playing.
+
+  type InternalTrack = {
+    audio: MockAudioElement;
+    audioBuffer: AudioBuffer | null;
+    scheduleGaplessStart: (when: number) => void;
+  };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
+
+  it('onProgress reports isPaused=true after pausing a gaplessly-started WebAudio track', async () => {
+    const progressSpy = vi.fn();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onProgress: progressSpy });
+
+    // Track 1 gets a WebAudio buffer; track 0 stays HTML5
+    injectBuffer(q, 1, 180);
+    q.play();
+
+    const internal = q as unknown as InternalQueue;
+    // Actually schedule the gapless start on track 1 (puts it in webaudio state)
+    internal._tracks[1].scheduleGaplessStart(0);
+    internal._scheduledNextIndex = 1;
+
+    // Track 0 HTML5 ends → gapless transition to track 1
+    internal._tracks[0].audio.simulateEnded();
+    await Promise.resolve(); // let queueMicrotask(onTrackEnded) fire
+
+    expect(q.currentTrackIndex).toBe(1);
+    expect(q.tracks[1].playbackType).toBe('WEBAUDIO');
+
+    // Clear any progress calls from the transition
+    progressSpy.mockClear();
+
+    // Pause the gaplessly-started WebAudio track
+    q.pause();
+
+    // The reportProgress action fires during PAUSE — wait for microtask
+    await Promise.resolve();
+
+    // The final onProgress call must reflect paused state
+    const lastCall = progressSpy.mock.calls[progressSpy.mock.calls.length - 1]?.[0];
+    expect(lastCall).toBeDefined();
+    expect(lastCall.isPaused).toBe(true);
+    expect(lastCall.isPlaying).toBe(false);
+  });
+});
+
 describe('Queue seek cancels stale gapless schedule', () => {
   type InternalTrack = {
     audioBuffer: AudioBuffer | null;

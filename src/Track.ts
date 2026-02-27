@@ -172,7 +172,9 @@ export class Track {
         stopSourceNode: () => this._stopSourceNode(),
         disconnectGain: () => this._disconnectGain(),
         stopProgressLoop: () => this._stopProgressLoop(),
-        reportProgress: () => this.queueRef.onProgress(this.toInfo()),
+        reportProgress: () => {
+          queueMicrotask(() => this.queueRef.onProgress(this.toInfo()));
+        },
         seekHtml5: () => this._seekHtml5(),
         seekWebAudio: () => this._seekWebAudio(),
         resetHtml5Element: () => {

@@ -58,7 +58,7 @@ export default defineConfig({
   plugins: [react(), corsProxyPlugin()],
   resolve: {
     alias: {
-      'gapless.js': path.resolve(__dirname, '../src/index.ts'),
+      'gapless': path.resolve(__dirname, '../src/index.ts'),
     },
   },
 });
