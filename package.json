@@ -1,6 +1,6 @@
 {
   "name": "gapless",
-  "version": "4.0.6",
+  "version": "4.0.9",
   "description": "Gapless audio playback javascript plugin",
   "type": "module",
   "main": "dist/index.mjs",
@@ -27,7 +27,8 @@
     "dev": "pnpm --dir demo dev",
     "types": "tsc --noEmit",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "pnpm run build"
   },
   "repository": {
     "type": "git",
@@ -47,14 +48,6 @@
     "vitest": "^4.0.18"
   },
   "packageManager": "pnpm@10.30.2",
-  "peerDependencies": {
-    "xstate": "^5.28.0"
-  },
-  "peerDependenciesMeta": {
-    "xstate": {
-      "optional": true
-    }
-  },
   "dependencies": {
     "xstate": "^5.28.0"
   }

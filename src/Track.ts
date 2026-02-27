@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import { createActor, fromPromise } from 'xstate';
-import { getAudioContext } from './utils/audioContext';
+import { getAudioContext, resumeAudioContext } from './utils/audioContext';
 import { createTrackMachine } from './machines/track.machine';
 import { fetchDecodeMachine } from './machines/fetchDecode.machine';
 import type { TrackContext } from './machines/track.machine';
@@ -228,7 +228,9 @@ export class Track {
     if (this._actor.getSnapshot().value === 'idle') {
       this._actor.send({ type: 'PRELOAD' });
     }
-    if (this.audioBuffer || !this.ctx) return;
+    if (this.audioBuffer) return;
+    resumeAudioContext();
+    if (!this.ctx) return;
     this._actor.send({ type: 'START_FETCH' });
   }
 

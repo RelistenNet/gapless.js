@@ -8,7 +8,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Queue } from '../../src/Queue';
 import type { TrackInfo } from '../../src/types';
-import { MockAudioBuffer, MockAudioElement, advanceTime, mockFetchSuccess, mockFetchFailure } from '../setup';
+import { MockAudioBuffer, MockAudioContext, MockAudioElement, advanceTime, mockFetchSuccess, mockFetchFailure } from '../setup';
+import { _resetAudioContext } from '../../src/utils/audioContext';
 
 // Helper: inject a pre-decoded buffer into a track (bypasses fetch pipeline)
 function injectBuffer(queue: Queue, trackIndex: number, duration = 180): void {
@@ -1111,6 +1112,104 @@ describe('Queue preloading', () => {
     expect(q.currentTrackIndex).toBe(1);
     expect(q.isPlaying).toBe(true);
     expect(onStartNewTrack).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Preload without prior AudioContext initialisation
+//
+// Regression: preload() used to silently no-op when the AudioContext had never
+// been created (e.g. play() was never called). The fix calls
+// resumeAudioContext() inside preload() to lazily initialise the context.
+// ---------------------------------------------------------------------------
+describe('Queue preloading without prior AudioContext', () => {
+  type InternalTrack = { audioBuffer: AudioBuffer | null; isBufferLoaded: boolean };
+  type InternalQueue = { _tracks: InternalTrack[] };
+
+  it('preload via gotoTrack() fetches buffers even when AudioContext was never created', async () => {
+    // Simulate the real initial state: AudioContext has never been created
+    _resetAudioContext();
+    // Provide the constructor so resumeAudioContext() can create one
+    vi.stubGlobal('AudioContext', MockAudioContext);
+
+    const fetchSpy = mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+
+    // gotoTrack without playing — triggers preload on nearby tracks
+    q.gotoTrack(0);
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    // Next track should have been fetched+decoded despite no prior play()
+    expect(tracks[1].isBufferLoaded).toBe(true);
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it('preload sends START_FETCH when AudioContext is lazily created', async () => {
+    _resetAudioContext();
+    vi.stubGlobal('AudioContext', MockAudioContext);
+
+    const fetchSpy = mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    const tracks = (q as unknown as InternalQueue)._tracks;
+
+    // Directly call preload on track 1 (simulating what Queue._preloadAhead does)
+    (tracks[1] as unknown as { preload(): void }).preload();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    // Fetch should have been triggered for track 1
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    expect(urls.some((u: string) => u.includes('b.mp3'))).toBe(true);
+    expect(tracks[1].isBufferLoaded).toBe(true);
+  });
+
+  it('preload is a no-op when AudioContext is unavailable (no browser API)', async () => {
+    _resetAudioContext();
+    // Do NOT stub window.AudioContext — simulates an environment without Web Audio
+    delete (window as unknown as Record<string, unknown>).AudioContext;
+    delete (window as unknown as Record<string, unknown>).webkitAudioContext;
+
+    const fetchSpy = mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    const tracks = (q as unknown as InternalQueue)._tracks;
+
+    (tracks[1] as unknown as { preload(): void }).preload();
+    await new Promise(r => setTimeout(r, 0));
+
+    // No fetch for audio buffer — Web Audio is not available
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    expect(urls.every((u: string) => !u.includes('b.mp3'))).toBe(true);
+    expect(tracks[1].isBufferLoaded).toBe(false);
+  });
+
+  it('preload still works after AudioContext is set up by play()', async () => {
+    // Start with no AudioContext
+    _resetAudioContext();
+    vi.stubGlobal('AudioContext', MockAudioContext);
+
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'] });
+    const tracks = (q as unknown as InternalQueue)._tracks;
+
+    // play() creates the AudioContext via resumeAudioContext
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    // Track 1 should already be preloaded by play()'s preload-ahead logic
+    expect(tracks[1].isBufferLoaded).toBe(true);
+
+    // Manually preload track 3 — should also work since ctx now exists
+    (tracks[3] as unknown as { preload(): void }).preload();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(tracks[3].isBufferLoaded).toBe(true);
   });
 });
 
