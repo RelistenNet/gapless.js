@@ -9,6 +9,6 @@ export default defineConfig({
   clean: true,
   minify: true,
   dts: true,
-  // Bundle xstate so consumers don't need to install it separately
-  noExternal: ['xstate'],
+  // Mark xstate as external so consumers can share a single instance
+  external: ['xstate'],
 });
