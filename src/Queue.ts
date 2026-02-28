@@ -270,6 +270,8 @@ export class Queue implements TrackQueueRef {
     }
     if (this._scheduledNextIndex === index) {
       this._scheduledNextIndex = null;
+    } else if (this._scheduledNextIndex !== null && this._scheduledNextIndex > index) {
+      this._scheduledNextIndex--;
     }
     this._actor.send({ type: 'REMOVE_TRACK', index });
   }
@@ -327,7 +329,9 @@ export class Queue implements TrackQueueRef {
     this.onDebug(
       `onTrackEnded track=${track.index} queueState=${snap.value} curIdx=${snap.context.currentTrackIndex}`
     );
-    if (track.index !== snap.context.currentTrackIndex) return;
+    // Compare object identity, not just index — after removeTrack(), a
+    // different track may occupy the same index as the ended track.
+    if (track !== this._trackAt(snap.context.currentTrackIndex)) return;
 
     this._actor.send({ type: 'TRACK_ENDED' });
     const newSnap = this._actor.getSnapshot();

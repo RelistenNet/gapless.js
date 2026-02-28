@@ -53,6 +53,11 @@ export function createQueueMachine(initialContext: QueueContext) {
       hasNextTrack: ({ context }) => context.currentTrackIndex + 1 < context.trackCount,
       playImmediately: ({ event }) =>
         !!(event as { type: 'GOTO'; playImmediately?: boolean }).playImmediately,
+      willBeEmpty: ({ context }) => context.trackCount <= 1,
+      isRemovingCurrent: ({ context, event }) => {
+        const e = event as { type: 'REMOVE_TRACK'; index: number };
+        return e.index === context.currentTrackIndex;
+      },
     },
     actions: {
       // --- named assign actions (avoids mixing inline assign with custom actions) ---
@@ -63,10 +68,14 @@ export function createQueueMachine(initialContext: QueueContext) {
         trackCount: ({ context }) => Math.max(0, context.trackCount - 1),
         currentTrackIndex: ({ context, event }) => {
           const e = event as { type: 'REMOVE_TRACK'; index: number };
+          const newCount = Math.max(0, context.trackCount - 1);
           if (e.index < context.currentTrackIndex) {
             return Math.max(0, context.currentTrackIndex - 1);
           }
-          return context.currentTrackIndex;
+          // Clamp to last valid index when removing at or after current
+          return newCount > 0
+            ? Math.min(context.currentTrackIndex, newCount - 1)
+            : 0;
         },
       }),
       gotoTrackIndex: assign({
@@ -83,7 +92,8 @@ export function createQueueMachine(initialContext: QueueContext) {
         currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
       }),
       advanceOnTrackEnd: assign({
-        currentTrackIndex: ({ context }) => context.currentTrackIndex + 1,
+        currentTrackIndex: ({ context }) =>
+          Math.min(context.currentTrackIndex + 1, context.trackCount - 1),
       }),
       resetToFirstTrack: assign({
         currentTrackIndex: () => 0,
@@ -169,6 +179,27 @@ export function createQueueMachine(initialContext: QueueContext) {
       // -----------------------------------------------------------------
       playing: {
         on: {
+          REMOVE_TRACK: [
+            {
+              guard: 'willBeEmpty',
+              target: 'idle',
+              actions: ['cancelAllGapless', 'decrementTrackCount'],
+            },
+            {
+              guard: 'isRemovingCurrent',
+              actions: [
+                'cancelAllGapless',
+                'decrementTrackCount',
+                'activateAndPlayCurrent',
+                'notifyStartNewTrack',
+                'updateMediaSessionMetadata',
+                'preloadAhead',
+              ],
+            },
+            {
+              actions: ['decrementTrackCount', 'cancelAndRescheduleGapless', 'preloadAhead'],
+            },
+          ],
           PAUSE: {
             target: 'paused',
             actions: ['cancelScheduledGapless', 'pauseCurrent'],
@@ -257,6 +288,20 @@ export function createQueueMachine(initialContext: QueueContext) {
       // -----------------------------------------------------------------
       paused: {
         on: {
+          REMOVE_TRACK: [
+            {
+              guard: 'willBeEmpty',
+              target: 'idle',
+              actions: ['cancelAllGapless', 'decrementTrackCount'],
+            },
+            {
+              guard: 'isRemovingCurrent',
+              actions: ['cancelAllGapless', 'decrementTrackCount', 'preloadAhead'],
+            },
+            {
+              actions: ['decrementTrackCount', 'preloadAhead'],
+            },
+          ],
           PLAY: {
             target: 'playing',
             actions: ['playCurrent', 'updateMediaSessionMetadata', 'preloadAhead', 'scheduleGapless'],
@@ -343,6 +388,10 @@ export function createQueueMachine(initialContext: QueueContext) {
       // -----------------------------------------------------------------
       ended: {
         on: {
+          ADD_TRACK: {
+            target: 'paused',
+            actions: 'incrementTrackCount',
+          },
           PLAY: {
             target: 'playing',
             actions: [
