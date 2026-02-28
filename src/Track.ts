@@ -172,7 +172,8 @@ export class Track {
         startProgressLoop: () => this.startProgressLoop(),
         pauseHtml5: () => this.audio.pause(),
         freezePausedTime: () => {
-          this.pausedAtTrackTime = this.currentTime;
+          const t = this.currentTime;
+          this.pausedAtTrackTime = isFinite(t) ? t : 0;
         },
         stopSourceNode: () => this._stopSourceNode(),
         disconnectGain: () => this._disconnectGain(),
@@ -214,6 +215,7 @@ export class Track {
   }
 
   seek(time: number): void {
+    if (!isFinite(time)) return;
     const clamped = Math.max(0, isNaN(this.duration) ? time : Math.min(time, this.duration));
     this.pausedAtTrackTime = clamped;
     this._actor.send({ type: 'SEEK', time: clamped });
@@ -380,6 +382,7 @@ export class Track {
 
   private _seekHtml5(): void {
     const clamped = this.pausedAtTrackTime;
+    if (!isFinite(clamped)) return;
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
     if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
       this.audio.currentTime = clamped;
