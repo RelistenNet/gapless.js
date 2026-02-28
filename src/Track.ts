@@ -486,7 +486,8 @@ export class Track {
         queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
       }
 
-      if (!this._notifiedPreloadThreshold && this.currentTime >= PRELOAD_DELAY) {
+      const preloadThreshold = isNaN(this.duration) ? PRELOAD_DELAY : Math.min(this.duration * 0.2, PRELOAD_DELAY);
+      if (!this._notifiedPreloadThreshold && this.currentTime >= preloadThreshold) {
         this._notifiedPreloadThreshold = true;
         queueMicrotask(() => this.queueRef.onPreloadReady(this));
       }

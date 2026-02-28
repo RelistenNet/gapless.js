@@ -1176,6 +1176,27 @@ describe('Queue deferred preloading', () => {
     expect(tracks[1].isBufferLoaded).toBe(true);
   });
 
+  it('preloads short track at 20% of duration instead of 15s', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    // 30s track → threshold = min(30*0.2, 15) = 6s
+    (tracks[0].audio as unknown as MockAudioElement).duration = 30;
+    // At 5s — still under 20% threshold
+    (tracks[0].audio as unknown as MockAudioElement).currentTime = 5;
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    expect(tracks[1].isBufferLoaded).toBe(false);
+    // At 6s — reaches 20% threshold
+    (tracks[0].audio as unknown as MockAudioElement).currentTime = 6;
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    expect(tracks[1].isBufferLoaded).toBe(true);
+  });
+
   it('preloads immediately from paused/idle state (not playing HTML5)', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });

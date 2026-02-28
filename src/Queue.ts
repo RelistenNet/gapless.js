@@ -381,9 +381,12 @@ export class Queue implements TrackQueueRef {
 
   private _preloadAhead(fromIndex: number): void {
     const cur = this._trackAt(fromIndex);
-    if (cur && cur.playbackType === 'HTML5' && cur.isPlaying && cur.currentTime < 15) {
-      this.onDebug(`_preloadAhead: deferring — HTML5 track ${fromIndex} at ${cur.currentTime.toFixed(1)}s`);
-      return;
+    if (cur && cur.playbackType === 'HTML5' && cur.isPlaying) {
+      const threshold = isNaN(cur.duration) ? 15 : Math.min(cur.duration * 0.2, 15);
+      if (cur.currentTime < threshold) {
+        this.onDebug(`_preloadAhead: deferring — HTML5 track ${fromIndex} at ${cur.currentTime.toFixed(1)}s (threshold=${threshold.toFixed(1)}s)`);
+        return;
+      }
     }
     const limit = fromIndex + PRELOAD_AHEAD + 1;
     this.onDebug(`_preloadAhead(${fromIndex}) limit=${limit} trackCount=${this._tracks.length}`);
