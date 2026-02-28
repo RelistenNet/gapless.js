@@ -899,6 +899,8 @@ describe('Queue HTML5 fallback and background loading', () => {
 
   it('activate() resets a track in loading state to idle', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    // Inject buffer into track 0 so preload is not deferred (Web Audio path)
+    injectBuffer(q, 0, 180);
     // Play track 0, which preloads track 1 into loading state
     q.play();
     // Track 1 should be in loading state from preload
@@ -922,6 +924,7 @@ describe('Queue HTML5 fallback and background loading', () => {
   it('next() to unloaded track plays HTML5, buffer loads in background, re-activation uses Web Audio', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 180);
     q.play();
     // Skip to track 1 before its buffer is ready — should fall back to HTML5
     q.next();
@@ -940,14 +943,12 @@ describe('Queue preloading', () => {
   type InternalTrack = { audioBuffer: AudioBuffer | null; audio: HTMLAudioElement; isBufferLoaded: boolean };
   type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
-  it('starts preloading next track immediately when play() is called', () => {
-    const fetchSpy = mockFetchSuccess();
+  it('defers preloading next track when playing via HTML5', () => {
+    mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
-    expect(fetchSpy).toHaveBeenCalled();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
-    expect(urls.some((u: string) => u.includes('b.mp3'))).toBe(true);
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    expect(tracks[1].isBufferLoaded).toBe(false);
   });
 
   it('does not double-fetch the current (HTML5) track', () => {
@@ -959,9 +960,10 @@ describe('Queue preloading', () => {
     expect(urls.every((u: string) => !u.includes('a.mp3'))).toBe(true);
   });
 
-  it('next track buffer is loading or loaded after play()', async () => {
+  it('next track buffer is loading or loaded after play() with Web Audio track', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 180);
     q.play();
     // BUFFER_LOADING is sent synchronously inside _startLoad, so no await needed
     expect(['LOADING', 'LOADED']).toContain(q.tracks[1].webAudioLoadingState);
@@ -970,6 +972,7 @@ describe('Queue preloading', () => {
   it('next track buffer is loaded after decode completes', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 180);
     q.play();
     await new Promise(r => setTimeout(r, 0));
     const t1 = (q as unknown as InternalQueue)._tracks[1];
@@ -980,6 +983,7 @@ describe('Queue preloading', () => {
   it('preload marks ERROR state when fetch fails, track stays playable', async () => {
     mockFetchFailure();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 0, 180);
     q.play();
     await new Promise(r => setTimeout(r, 0));
     expect(q.tracks[1].webAudioLoadingState).toBe('ERROR');
@@ -1013,6 +1017,7 @@ describe('Queue preloading', () => {
   it('preloads at most PRELOAD_AHEAD (2) tracks beyond current', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    injectBuffer(q, 0, 180);
     q.play();
     // Let all fetch+decode promises settle
     await new Promise(r => setTimeout(r, 0));
@@ -1033,6 +1038,7 @@ describe('Queue preloading', () => {
   it('preloads next tracks after advancing via next()', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    injectBuffer(q, 0, 180);
     q.play();
     await new Promise(r => setTimeout(r, 0));
     await new Promise(r => setTimeout(r, 0));
@@ -1052,7 +1058,8 @@ describe('Queue preloading', () => {
   it('previous() triggers preloading of tracks ahead of new position', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
-    // Play and advance to track 3
+    // Play and advance to track 3 (inject buffer so preload is not deferred)
+    injectBuffer(q, 0, 180);
     q.play();
     q.gotoTrack(3, true);
     await new Promise(r => setTimeout(r, 0));
@@ -1072,10 +1079,14 @@ describe('Queue preloading', () => {
   it('previous() from paused state triggers preloading', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    injectBuffer(q, 0, 180);
     q.play();
+    // Wait for preload chain to complete (track 1, then track 2)
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
     q.gotoTrack(3, true);
     q.pause();
-    // Go back via previous() while paused
+    // Go back via previous() while paused — track 2 has buffer, plays WebAudio
     q.previous();
     await new Promise(r => setTimeout(r, 0));
     await new Promise(r => setTimeout(r, 0));
@@ -1102,9 +1113,10 @@ describe('Queue preloading', () => {
     mockFetchSuccess();
     const onStartNewTrack = vi.fn();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], onStartNewTrack });
+    injectBuffer(q, 0, 180);
     q.play();
     await new Promise(r => setTimeout(r, 0));
-    // Track 1 should be preloaded
+    // Track 1 should be preloaded (track 0 is Web Audio, so preload is immediate)
     const tracks = (q as unknown as InternalQueue)._tracks;
     expect(tracks[1].isBufferLoaded).toBe(true);
     // Advance — should not freeze
@@ -1112,6 +1124,66 @@ describe('Queue preloading', () => {
     expect(q.currentTrackIndex).toBe(1);
     expect(q.isPlaying).toBe(true);
     expect(onStartNewTrack).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deferred preloading — HTML5 playback delays preloading until 15s in
+// ---------------------------------------------------------------------------
+describe('Queue deferred preloading', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    playbackType: string;
+    isPlaying: boolean;
+    currentTime: number;
+  };
+  type InternalQueue = { _tracks: InternalTrack[] };
+
+  it('does not preload next track immediately when current is HTML5 and < 15s', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    expect(tracks[1].isBufferLoaded).toBe(false);
+  });
+
+  it('preloads next track after current track reaches 15s', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    // Simulate audio.currentTime reaching 15s
+    (tracks[0].audio as unknown as MockAudioElement).currentTime = 15;
+    (tracks[0].audio as unknown as MockAudioElement).duration = 180;
+    // Trigger the rAF progress loop
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    expect(tracks[1].isBufferLoaded).toBe(true);
+  });
+
+  it('preloads immediately when current track is Web Audio (buffer already loaded)', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 0, 180);
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    expect(tracks[1].isBufferLoaded).toBe(true);
+  });
+
+  it('preloads immediately from paused/idle state (not playing HTML5)', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    q.gotoTrack(0);
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    const tracks = (q as unknown as InternalQueue)._tracks;
+    expect(tracks[1].isBufferLoaded).toBe(true);
   });
 });
 
@@ -1196,12 +1268,12 @@ describe('Queue preloading without prior AudioContext', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'] });
     const tracks = (q as unknown as InternalQueue)._tracks;
 
-    // play() creates the AudioContext via resumeAudioContext
-    q.play();
+    // gotoTrack() creates the AudioContext and triggers preloading (paused, so no deferral)
+    q.gotoTrack(0);
     await new Promise(r => setTimeout(r, 0));
     await new Promise(r => setTimeout(r, 0));
 
-    // Track 1 should already be preloaded by play()'s preload-ahead logic
+    // Track 1 should already be preloaded by gotoTrack()'s preload-ahead logic
     expect(tracks[1].isBufferLoaded).toBe(true);
 
     // Manually preload track 3 — should also work since ctx now exists

@@ -12,6 +12,7 @@ import type { TrackInfo, TrackMetadata, WebAudioLoadingState, PlaybackType } fro
 export interface TrackQueueRef {
   onTrackEnded(track: Track): void;
   onTrackBufferReady(track: Track): void;
+  onPreloadReady(track: Track): void;
   onProgress(info: TrackInfo): void;
   onError(error: Error): void;
   onPlayBlocked(): void;
@@ -23,6 +24,9 @@ export interface TrackQueueRef {
 
 /** How close to the end (in seconds) before we attempt gapless scheduling. */
 const GAPLESS_SCHEDULE_LOOKAHEAD = 5;
+
+/** How many seconds into HTML5 playback before we preload the next track. */
+const PRELOAD_DELAY = 15;
 
 export class Track {
   readonly index: number;
@@ -63,6 +67,7 @@ export class Track {
   // ---- Callbacks -----------------------------------------------------------
   private readonly queueRef: TrackQueueRef;
   private rafId: number | null = null;
+  private _notifiedPreloadThreshold = false;
 
   constructor(opts: {
     trackUrl: string;
@@ -249,6 +254,7 @@ export class Track {
     this.queueRef.onDebug(
       `Track.deactivate() track=${this.index} machineState=${this._actor.getSnapshot().value} isPlaying=${this.isPlaying}`
     );
+    this._notifiedPreloadThreshold = false;
     this._actor.send({ type: 'DEACTIVATE' });
     this.queueRef.onDebug(
       `Track.deactivate() done track=${this.index} machineState=${this._actor.getSnapshot().value}`
@@ -478,6 +484,11 @@ export class Track {
       ) {
         this._actor.send({ type: 'LOOKAHEAD_REACHED' });
         queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
+      }
+
+      if (!this._notifiedPreloadThreshold && this.currentTime >= PRELOAD_DELAY) {
+        this._notifiedPreloadThreshold = true;
+        queueMicrotask(() => this.queueRef.onPreloadReady(this));
       }
 
       this.rafId = requestAnimationFrame(loop);

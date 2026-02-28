@@ -356,6 +356,12 @@ export class Queue implements TrackQueueRef {
     this._onPlayBlocked?.();
   }
 
+  onPreloadReady(track: Track): void {
+    const snap = this._actor.getSnapshot();
+    if (track.index !== snap.context.currentTrackIndex) return;
+    this._preloadAhead(snap.context.currentTrackIndex);
+  }
+
   onDebug(msg: string): void {
     this._onDebug?.(msg);
   }
@@ -374,6 +380,11 @@ export class Queue implements TrackQueueRef {
   }
 
   private _preloadAhead(fromIndex: number): void {
+    const cur = this._trackAt(fromIndex);
+    if (cur && cur.playbackType === 'HTML5' && cur.isPlaying && cur.currentTime < 15) {
+      this.onDebug(`_preloadAhead: deferring — HTML5 track ${fromIndex} at ${cur.currentTime.toFixed(1)}s`);
+      return;
+    }
     const limit = fromIndex + PRELOAD_AHEAD + 1;
     this.onDebug(`_preloadAhead(${fromIndex}) limit=${limit} trackCount=${this._tracks.length}`);
     for (let i = fromIndex + 1; i < this._tracks.length && i < limit; i++) {

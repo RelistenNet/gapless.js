@@ -19,6 +19,7 @@ function makeQueue(overrides: Partial<TrackQueueRef> = {}): TrackQueueRef {
   return {
     onTrackEnded: vi.fn(),
     onTrackBufferReady: vi.fn(),
+    onPreloadReady: vi.fn(),
     onProgress: vi.fn(),
     onError: vi.fn(),
     onPlayBlocked: vi.fn(),
