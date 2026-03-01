@@ -357,6 +357,7 @@ export class Queue implements TrackQueueRef {
   }
 
   onPlayBlocked(): void {
+    this._actor.send({ type: 'PAUSE' });
     this._onPlayBlocked?.();
   }
 

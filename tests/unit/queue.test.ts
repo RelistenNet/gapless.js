@@ -1583,3 +1583,60 @@ describe('Queue gapless scheduling state', () => {
     expect(internal._scheduledNextIndex).toBeNull();
   });
 });
+
+describe('Queue autoplay blocked', () => {
+  type InternalTrack = { audio: HTMLAudioElement };
+  type InternalQueue = { _tracks: InternalTrack[] };
+
+  function getTrackAudio(q: Queue, i: number): HTMLAudioElement {
+    return (q as unknown as InternalQueue)._tracks[i].audio;
+  }
+
+  function mockPlayBlocked(audio: HTMLAudioElement): void {
+    const err = new DOMException('Autoplay blocked', 'NotAllowedError');
+    vi.spyOn(audio, 'play').mockReturnValue(Promise.reject(err));
+  }
+
+  it('transitions to paused when autoplay is blocked', async () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], webAudioIsDisabled: true });
+    mockPlayBlocked(getTrackAudio(q, 0));
+
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(q.isPaused).toBe(true);
+    expect(q.isPlaying).toBe(false);
+    q.destroy();
+  });
+
+  it('play() works after autoplay was blocked', async () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], webAudioIsDisabled: true });
+    const audio = getTrackAudio(q, 0);
+    mockPlayBlocked(audio);
+
+    q.play();
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(q.isPaused).toBe(true);
+
+    // Restore play to resolve (user gesture unblocks autoplay)
+    vi.spyOn(audio, 'play').mockReturnValue(Promise.resolve());
+    q.play();
+
+    expect(q.isPlaying).toBe(true);
+    q.destroy();
+  });
+
+  it('gotoTrack with playImmediately transitions to paused when autoplay is blocked', async () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], webAudioIsDisabled: true });
+    mockPlayBlocked(getTrackAudio(q, 1));
+
+    q.gotoTrack(1, true);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(q.isPaused).toBe(true);
+    expect(q.isPlaying).toBe(false);
+    expect(q.currentTrackIndex).toBe(1);
+    q.destroy();
+  });
+});
