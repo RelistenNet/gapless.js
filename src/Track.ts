@@ -7,7 +7,7 @@ import { getAudioContext, resumeAudioContext } from './utils/audioContext';
 import { createTrackMachine } from './machines/track.machine';
 import { fetchDecodeMachine } from './machines/fetchDecode.machine';
 import type { TrackContext } from './machines/track.machine';
-import type { TrackInfo, TrackMetadata, WebAudioLoadingState, PlaybackType } from './types';
+import type { TrackInfo, TrackMetadata, WebAudioLoadingState, PlaybackType, PlaybackMethod } from './types';
 
 export interface TrackQueueRef {
   onTrackEnded(track: Track): void;
@@ -18,7 +18,8 @@ export interface TrackQueueRef {
   onPlayBlocked(): void;
   onDebug(msg: string): void;
   readonly volume: number;
-  readonly webAudioIsDisabled: boolean;
+  readonly playbackMethod: PlaybackMethod;
+  readonly playbackRate: number;
   readonly currentTrackIndex: number;
 }
 
@@ -42,10 +43,10 @@ export class Track {
   readonly audio: HTMLAudioElement;
 
   // ---- Web Audio nodes -----------------------------------------------------
-  private readonly _webAudioDisabled: boolean;
+  private readonly _playbackMethod: PlaybackMethod;
 
   private get ctx(): AudioContext | null {
-    if (this._webAudioDisabled) return null;
+    if (this._playbackMethod === 'HTML5_ONLY') return null;
     const context = getAudioContext();
     if (context && !this.gainNode) {
       this.gainNode = context.createGain();
@@ -57,8 +58,10 @@ export class Track {
   private gainNode: GainNode | null = null;
   private sourceNode: AudioBufferSourceNode | null = null;
   audioBuffer: AudioBuffer | null = null;
-  /** AudioContext.currentTime when the current source node was started. */
-  private webAudioStartedAt = 0;
+  /** AudioContext.currentTime at the start of the current playback segment. */
+  private _waRefCtxTime = 0;
+  /** Track position (seconds) at the start of the current playback segment. */
+  private _waRefTrackTime = 0;
   /** Track-time (seconds) frozen at the moment of the most recent pause. */
   private pausedAtTrackTime = 0;
   // ---- FSM -----------------------------------------------------------------
@@ -104,7 +107,7 @@ export class Track {
       this._actor.send({ type: 'HTML5_ENDED' });
     };
 
-    this._webAudioDisabled = opts.queue.webAudioIsDisabled;
+    this._playbackMethod = opts.queue.playbackMethod;
 
     const initialContext: TrackContext = {
       trackUrl: this._trackUrl,
@@ -116,10 +119,12 @@ export class Track {
       scheduledStartContextTime: null,
       notifiedLookahead: false,
       fetchStarted: false,
+      pendingPlay: false,
     };
     const machine = createTrackMachine(initialContext).provide({
       guards: {
         canPlayWebAudio: () => !!(this.ctx && this.audioBuffer && this.gainNode),
+        isWebAudioOnly: () => this._playbackMethod === 'WEBAUDIO_ONLY',
       },
       actors: {
         fetchDecode: fetchDecodeMachine.provide({
@@ -150,6 +155,10 @@ export class Track {
         }),
       },
       actions: {
+        triggerFetchForPendingPlay: () => {
+          this.preload();
+          resumeAudioContext();
+        },
         playHtml5: () => this._playHtml5(),
         startSourceNode: () => {
           this._startSourceNode(this.pausedAtTrackTime);
@@ -160,11 +169,13 @@ export class Track {
           this._stopSourceNode();
           this.sourceNode = this.ctx.createBufferSource();
           this.sourceNode.buffer = this.audioBuffer;
+          this.sourceNode.playbackRate.value = this.queueRef.playbackRate;
           this.sourceNode.connect(this.gainNode);
           this.gainNode.connect(this.ctx.destination);
           this.sourceNode.onended = this._handleWebAudioEnded;
           this.sourceNode.start(when, 0);
-          this.webAudioStartedAt = when;
+          this._waRefCtxTime = when;
+          this._waRefTrackTime = 0;
           this.queueRef.onDebug(
             `startScheduledSourceNode track=${this.index} when=${when.toFixed(3)} ctxNow=${this.ctx.currentTime.toFixed(3)} delta=${(when - this.ctx.currentTime).toFixed(3)}s`
           );
@@ -187,7 +198,8 @@ export class Track {
           this.audio.currentTime = 0;
         },
         resetTiming: () => {
-          this.webAudioStartedAt = 0;
+          this._waRefCtxTime = 0;
+          this._waRefTrackTime = 0;
           this.pausedAtTrackTime = 0;
         },
         notifyTrackEnded: () => {
@@ -226,6 +238,17 @@ export class Track {
     this.audio.volume = vol;
     if (this.gainNode) this.gainNode.gain.value = vol;
     this._actor.send({ type: 'SET_VOLUME', volume: vol });
+  }
+
+  setPlaybackRate(rate: number): void {
+    // Freeze current track position at the old rate before switching
+    if (this.ctx && this.sourceNode && this._actor.getSnapshot().context.isPlaying) {
+      const oldRate = this.sourceNode.playbackRate.value;
+      this._waRefTrackTime = this._waRefTrackTime + (this.ctx.currentTime - this._waRefCtxTime) * oldRate;
+      this._waRefCtxTime = this.ctx.currentTime;
+    }
+    this.audio.playbackRate = rate;
+    if (this.sourceNode) this.sourceNode.playbackRate.value = rate;
   }
 
   preload(): void {
@@ -296,7 +319,7 @@ export class Track {
     if (snap.value === 'webaudio') {
       if (!snap.context.isPlaying) return this.pausedAtTrackTime;
       if (!this.ctx) return 0;
-      return Math.max(0, this.ctx.currentTime - this.webAudioStartedAt);
+      return Math.max(0, this._waRefTrackTime + (this.ctx.currentTime - this._waRefCtxTime) * this.queueRef.playbackRate);
     }
     return this.audio.currentTime;
   }
@@ -356,6 +379,7 @@ export class Track {
       playbackType: this.playbackType,
       webAudioLoadingState: this.webAudioLoadingState,
       metadata: this.metadata,
+      playbackRate: this.queueRef.playbackRate,
       machineState: this.machineState,
     };
   }
@@ -366,6 +390,7 @@ export class Track {
 
   private _playHtml5(): void {
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
+    this.audio.playbackRate = this.queueRef.playbackRate;
     const promise = this.audio.play();
     if (promise) {
       promise.catch((err: unknown) => {
@@ -414,11 +439,13 @@ export class Track {
 
     this.sourceNode = this.ctx.createBufferSource();
     this.sourceNode.buffer = this.audioBuffer;
+    this.sourceNode.playbackRate.value = this.queueRef.playbackRate;
     this.sourceNode.connect(this.gainNode);
     this.gainNode.connect(this.ctx.destination);
     this.sourceNode.onended = this._handleWebAudioEnded;
 
-    this.webAudioStartedAt = this.ctx.currentTime - offset;
+    this._waRefCtxTime = this.ctx.currentTime;
+    this._waRefTrackTime = offset;
     this.sourceNode.start(0, offset);
   }
 

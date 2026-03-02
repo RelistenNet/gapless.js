@@ -2,7 +2,7 @@
 // Timing math tests
 //
 // Verifies the currentTime formula:
-//   Playing:  audioContext.currentTime - webAudioStartedAt
+//   Playing:  _waRefTrackTime + (ctx.currentTime - _waRefCtxTime) * playbackRate
 //   Paused:   pausedAtTrackTime  (frozen)
 //
 // These tests exercise the Track class's time-tracking logic directly,
@@ -25,7 +25,8 @@ function makeQueue(overrides: Partial<TrackQueueRef> = {}): TrackQueueRef {
     onPlayBlocked: vi.fn(),
     onDebug: vi.fn(),
     volume: 1,
-    webAudioIsDisabled: false,
+    playbackMethod: 'HYBRID' as const,
+    playbackRate: 1,
     currentTrackIndex: 0,
     ...overrides,
   };
@@ -118,6 +119,59 @@ describe('Track currentTime', () => {
     t.seek(-10);
     expect(t.currentTime).toBeCloseTo(0, 1);
   });
+
+  it('reflects playbackRate in WebAudio currentTime', () => {
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue({ playbackRate: 2 }) });
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    t.play();
+    advanceTime(10); // 10 wall-clock seconds at 2x = 20 track seconds
+    expect(t.currentTime).toBeCloseTo(20, 1);
+  });
+
+  it('reflects playbackRate after seek', () => {
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue({ playbackRate: 2 }) });
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    t.play();
+    t.seek(100);
+    advanceTime(5); // 5 wall-clock seconds at 2x = 10 track seconds from seek point
+    expect(t.currentTime).toBeCloseTo(110, 1);
+  });
+
+  it('reflects playbackRate after pause/resume', () => {
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue({ playbackRate: 1.5 }) });
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    t.play();
+    advanceTime(10); // 10 wall-clock seconds at 1.5x = 15 track seconds
+    expect(t.currentTime).toBeCloseTo(15, 1);
+    t.pause();
+    expect(t.currentTime).toBeCloseTo(15, 1);
+    t.play();
+    advanceTime(10); // another 10 wall-clock seconds at 1.5x = 15 more
+    expect(t.currentTime).toBeCloseTo(30, 1);
+  });
+
+  it('reflects playbackRate in scheduleGaplessStart', () => {
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue({ playbackRate: 2 }) });
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    advanceTime(10);
+    t.scheduleGaplessStart(10); // starts at ctx.currentTime = 10
+    advanceTime(5); // 5 wall-clock seconds at 2x = 10 track seconds
+    expect(t.currentTime).toBeCloseTo(10, 1);
+  });
+
+  it('reflects mid-playback rate change', () => {
+    const q = makeQueue({ playbackRate: 1 });
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: q });
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    t.play();
+    advanceTime(10); // 10s at 1x = 10 track seconds
+    expect(t.currentTime).toBeCloseTo(10, 1);
+    // Change rate to 2x — need to update queueRef and track
+    (q as { playbackRate: number }).playbackRate = 2;
+    t.setPlaybackRate(2);
+    advanceTime(5); // 5 wall-clock seconds at 2x = 10 more track seconds
+    expect(t.currentTime).toBeCloseTo(20, 1);
+  });
 });
 
 describe('Track duration', () => {
@@ -162,10 +216,10 @@ describe('Track scheduleGaplessStart', () => {
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
     advanceTime(10);            // ctx.currentTime = 10
-    t.scheduleGaplessStart(10); // webAudioStartedAt = 10, so offset 0
+    t.scheduleGaplessStart(10); // _waRefCtxTime = 10, _waRefTrackTime = 0
     advanceTime(5);             // ctx.currentTime = 15
 
-    // currentTime = ctx.currentTime - webAudioStartedAt = 15 - 10 = 5
+    // currentTime = 0 + (15 - 10) * 1 = 5
     expect(t.currentTime).toBeCloseTo(5, 1);
   });
 

@@ -34,9 +34,9 @@ describe('Queue construction', () => {
     expect(q.tracks).toHaveLength(3);
   });
 
-  it('respects webAudioIsDisabled option', () => {
-    const q = new Queue({ webAudioIsDisabled: true });
-    expect(q.webAudioIsDisabled).toBe(true);
+  it('respects playbackMethod option', () => {
+    const q = new Queue({ playbackMethod: 'HTML5_ONLY' });
+    expect(q.playbackMethod).toBe('HTML5_ONLY');
   });
 
   it('applies initial volume to all tracks', () => {
@@ -356,7 +356,8 @@ describe('Queue onTrackEnded resets finished track', () => {
     audio: MockAudioElement;
     isBufferLoaded: boolean;
     currentTime: number;
-    webAudioStartedAt: number;
+    _waRefCtxTime: number;
+    _waRefTrackTime: number;
     pausedAtTrackTime: number;
   };
   type InternalQueue = { _tracks: InternalTrack[] };
@@ -413,7 +414,8 @@ describe('Queue onTrackEnded resets finished track', () => {
     audioOf(q, 0).simulateEnded();
     await Promise.resolve();
 
-    expect(internal._tracks[0].webAudioStartedAt).toBe(0);
+    expect(internal._tracks[0]._waRefCtxTime).toBe(0);
+    expect(internal._tracks[0]._waRefTrackTime).toBe(0);
     expect(internal._tracks[0].pausedAtTrackTime).toBe(0);
     expect(audioOf(q, 0).currentTime).toBe(0);
   });
@@ -1598,7 +1600,7 @@ describe('Queue autoplay blocked', () => {
   }
 
   it('transitions to paused when autoplay is blocked', async () => {
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], webAudioIsDisabled: true });
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], playbackMethod: 'HTML5_ONLY' });
     mockPlayBlocked(getTrackAudio(q, 0));
 
     q.play();
@@ -1610,7 +1612,7 @@ describe('Queue autoplay blocked', () => {
   });
 
   it('play() works after autoplay was blocked', async () => {
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], webAudioIsDisabled: true });
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], playbackMethod: 'HTML5_ONLY' });
     const audio = getTrackAudio(q, 0);
     mockPlayBlocked(audio);
 
@@ -1628,7 +1630,7 @@ describe('Queue autoplay blocked', () => {
   });
 
   it('gotoTrack with playImmediately transitions to paused when autoplay is blocked', async () => {
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], webAudioIsDisabled: true });
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], playbackMethod: 'HTML5_ONLY' });
     mockPlayBlocked(getTrackAudio(q, 1));
 
     q.gotoTrack(1, true);

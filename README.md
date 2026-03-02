@@ -53,9 +53,11 @@ const player = new Queue({
   onError: (error) => {},       // Called on audio errors
   onPlayBlocked: () => {},      // Called when autoplay is blocked by the browser
   onDebug: (msg) => {},         // Internal debug messages (development only)
-  webAudioIsDisabled: false,    // Disable Web Audio API (disables gapless playback)
+  playbackMethod: 'HYBRID',     // 'HYBRID' | 'HTML5_ONLY' | 'WEBAUDIO_ONLY'
   trackMetadata: [],            // Per-track metadata (aligned by index)
   volume: 1,                    // Initial volume, 0.0–1.0
+  preloadNumTracks: 2,              // Number of tracks to preload ahead (0 to disable)
+  playbackRate: 1,              // Initial playback rate, 0.25–4.0
 });
 ```
 
@@ -71,6 +73,7 @@ const player = new Queue({
 | `gotoTrack(index, playImmediately?)` | Jump to a track by index |
 | `seek(time)` | Seek to a position in seconds |
 | `setVolume(volume)` | Set volume (0.0–1.0) |
+| `setPlaybackRate(rate)` | Set playback rate (0.25–4.0), reschedules gapless transitions |
 | `addTrack(url, options?)` | Add a track to the end of the queue |
 | `removeTrack(index)` | Remove a track by index |
 | `resumeAudioContext()` | Resume the AudioContext (for browsers that require user gesture) |
@@ -86,6 +89,8 @@ const player = new Queue({
 | `isPlaying` | `boolean` | Whether the queue is playing |
 | `isPaused` | `boolean` | Whether the queue is paused |
 | `volume` | `number` | Current volume |
+| `playbackRate` | `number` | Current playback rate |
+| `preloadNumTracks` | `number` | Number of tracks to preload ahead (read/write) |
 
 ### `TrackInfo`
 
@@ -103,6 +108,7 @@ interface TrackInfo {
   playbackType: 'HTML5' | 'WEBAUDIO';
   webAudioLoadingState: 'NONE' | 'LOADING' | 'LOADED' | 'ERROR';
   metadata?: TrackMetadata;
+  playbackRate: number;               // Current playback rate
   machineState: string;             // Internal state machine state
 }
 ```
@@ -135,6 +141,56 @@ interface TrackMetadata {
 }
 ```
 
+## Playback Method
+
+The `playbackMethod` option controls how audio is rendered:
+
+| Value | Behavior | Use case |
+|-------|----------|----------|
+| `'HYBRID'` (default) | Starts with HTML5 audio, switches to Web Audio after decode | Remote files — instant playback + gapless transitions |
+| `'HTML5_ONLY'` | HTML5 audio exclusively, no Web Audio | When Web Audio is unavailable or unwanted; gapless playback disabled |
+| `'WEBAUDIO_ONLY'` | Web Audio API exclusively, no HTML5 fallback | Very small or local files where buffering is instant |
+
+```javascript
+// Web Audio only — waits for decode before playing
+const player = new Queue({
+  tracks: ['track1.mp3', 'track2.mp3'],
+  playbackMethod: 'WEBAUDIO_ONLY',
+});
+
+player.play(); // Waits for decode, then plays via Web Audio
+```
+
+## Preload Count
+
+Control how many tracks are preloaded ahead of the current track:
+
+```javascript
+const player = new Queue({
+  tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'],
+  preloadNumTracks: 1, // Only preload 1 track ahead (default: 2)
+});
+
+// Can also be changed at runtime:
+player.preloadNumTracks = 0; // Disable preloading
+player.preloadNumTracks = 3; // Preload 3 ahead
+```
+
+## Playback Rate
+
+Control the speed of playback (0.25x to 4x). Gapless scheduling automatically adjusts for the current rate:
+
+```javascript
+const player = new Queue({
+  tracks: ['a.mp3', 'b.mp3'],
+  playbackRate: 1.5, // Start at 1.5x
+});
+
+player.play();
+player.setPlaybackRate(2); // Change to 2x mid-playback
+console.log(player.playbackRate); // 2
+```
+
 ## Migration from v3
 
 v4 is a complete rewrite. The public API has changed:
@@ -145,7 +201,7 @@ v4 is a complete rewrite. The public API has changed:
 | `player.playNext()` | `player.next()` |
 | `player.playPrevious()` | `player.previous()` |
 | `player.resetCurrentTrack()` | `player.seek(0)` |
-| `player.disableWebAudio()` | Pass `webAudioIsDisabled: true` in constructor |
+| `player.disableWebAudio()` | Pass `playbackMethod: 'HTML5_ONLY'` in constructor |
 | `player.nextTrack` | `player.tracks[player.currentTrackIndex + 1]` |
 | `track.completeState` | Callbacks now receive `TrackInfo` objects |
 | Callbacks receive Track instances | Callbacks receive plain `TrackInfo` data snapshots |

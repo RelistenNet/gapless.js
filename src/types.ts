@@ -4,6 +4,14 @@
 
 export type PlaybackType = 'HTML5' | 'WEBAUDIO';
 
+/**
+ * Controls how audio is rendered.
+ * - `'HYBRID'` (default): Starts with HTML5 audio, then switches to Web Audio after decode. Best for remote files.
+ * - `'HTML5_ONLY'`: Uses HTML5 audio exclusively. Gapless playback is not available.
+ * - `'WEBAUDIO_ONLY'`: Uses Web Audio API exclusively. Audio must fully buffer before playing — only use for very small or local files.
+ */
+export type PlaybackMethod = 'HYBRID' | 'HTML5_ONLY' | 'WEBAUDIO_ONLY';
+
 export type WebAudioLoadingState = 'NONE' | 'LOADING' | 'LOADED' | 'ERROR';
 
 /** Metadata attached to a track (arbitrary user data). */
@@ -36,14 +44,25 @@ export interface GaplessOptions {
   /** Called when autoplay is blocked by the browser. */
   onPlayBlocked?: () => void;
   /**
-   * Set true to disable Web Audio API entirely and use HTML5 audio only.
-   * Gapless playback will not be available in this mode.
+   * Controls how audio is rendered.
+   * - `'HYBRID'` (default): Starts with HTML5 audio, switches to Web Audio after decode. Best for remote files.
+   * - `'HTML5_ONLY'`: HTML5 audio only. Gapless playback is not available.
+   * - `'WEBAUDIO_ONLY'`: Web Audio API only. Audio must fully buffer before playing.
    */
-  webAudioIsDisabled?: boolean;
+  playbackMethod?: PlaybackMethod;
   /** Per-track metadata (aligned to the tracks array by index). */
   trackMetadata?: TrackMetadata[];
   /** Initial volume, 0.0–1.0. Defaults to 1. */
   volume?: number;
+  /**
+   * Number of tracks to preload ahead of the current track.
+   * Defaults to 2. Set to 0 to disable preloading.
+   */
+  preloadNumTracks?: number;
+  /**
+   * Initial playback rate, 0.25–4.0. Defaults to 1.
+   */
+  playbackRate?: number;
 }
 
 /** Options for dynamically adding a track. */
@@ -82,6 +101,8 @@ export interface TrackInfo {
   webAudioLoadingState: WebAudioLoadingState;
   /** Arbitrary metadata supplied when the track was added. */
   metadata?: TrackMetadata;
+  /** Current playback rate. */
+  playbackRate: number;
   /** Current xstate machine state for this track (e.g. 'idle', 'html5', 'webaudio'). */
   machineState: string;
 }

@@ -23,6 +23,7 @@ export interface GaplessState {
   tracks: readonly TrackInfo[];
   logs: LogEntry[];
   volume: number;
+  playbackRate: number;
   queueSnapshot: QueueSnapshot;
   machineLog: MachineLogEntry[];
 }
@@ -36,6 +37,7 @@ export interface GaplessControls {
   seek: (time: number) => void;
   gotoTrack: (index: number) => void;
   setVolume: (v: number) => void;
+  setPlaybackRate: (rate: number) => void;
   seekToEnd: () => void;
 }
 
@@ -49,6 +51,7 @@ export function useGapless(options: {
   const [tracks, setTracks] = useState<readonly TrackInfo[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [volume, setVolumeState] = useState(options.volume);
+  const [playbackRate, setPlaybackRateState] = useState(1);
   const [queueSnapshot, setQueueSnapshot] = useState<QueueSnapshot>({
     state: 'idle',
     context: { currentTrackIndex: 0, trackCount: 0 },
@@ -188,6 +191,11 @@ export function useGapless(options: {
     setVolumeState(v);
   }, []);
 
+  const setPlaybackRate = useCallback((rate: number) => {
+    queueRef.current?.setPlaybackRate(rate);
+    setPlaybackRateState(rate);
+  }, []);
+
   const seekToEnd = useCallback(() => {
     const queue = queueRef.current;
     const cur = queue?.currentTrack;
@@ -208,6 +216,7 @@ export function useGapless(options: {
     tracks,
     logs,
     volume,
+    playbackRate,
     queueSnapshot,
     machineLog,
     play,
@@ -218,6 +227,7 @@ export function useGapless(options: {
     seek,
     gotoTrack,
     setVolume,
+    setPlaybackRate,
     seekToEnd,
   };
 }

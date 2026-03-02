@@ -79,6 +79,8 @@ function Player({ preset }: { preset: TestPreset }) {
           onSeek={gapless.seek}
           onSeekToEnd={gapless.seekToEnd}
           onVolumeChange={gapless.setVolume}
+          playbackRate={gapless.playbackRate}
+          onPlaybackRateChange={gapless.setPlaybackRate}
         />
 
         <Playlist

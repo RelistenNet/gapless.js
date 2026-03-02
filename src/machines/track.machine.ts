@@ -39,6 +39,8 @@ export interface TrackContext {
   scheduledStartContextTime: number | null;
   notifiedLookahead: boolean;
   fetchStarted: boolean;
+  /** True when PLAY was received in webAudioOnly mode before buffer is ready. */
+  pendingPlay: boolean;
 }
 
 // ---- Events ----------------------------------------------------------------
@@ -76,6 +78,7 @@ export function createTrackMachine(initialContext: TrackContext) {
     },
     guards: {
       canPlayWebAudio: () => false,
+      isWebAudioOnly: () => false,
       canStartFetch: ({ context }) => context.webAudioLoadingState === 'NONE' && !context.fetchStarted,
     },
     actions: {
@@ -94,6 +97,9 @@ export function createTrackMachine(initialContext: TrackContext) {
       resetHtml5Element: () => {},
       resetTiming: () => {},
       notifyTrackEnded: () => {},
+      triggerFetchForPendingPlay: () => {},
+      setPendingPlay: assign({ pendingPlay: () => true }),
+      clearPendingPlay: assign({ pendingPlay: () => false }),
       setIsPlaying: assign({ isPlaying: () => true }),
       clearIsPlaying: assign({ isPlaying: () => false }),
       setLoadingState: assign({ webAudioLoadingState: () => 'LOADING' as WebAudioLoadingState }),
@@ -187,6 +193,10 @@ export function createTrackMachine(initialContext: TrackContext) {
               ],
             },
             {
+              guard: 'isWebAudioOnly',
+              actions: ['setPendingPlay', 'triggerFetchForPendingPlay'],
+            },
+            {
               target: 'html5',
               actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop'],
             },
@@ -210,11 +220,18 @@ export function createTrackMachine(initialContext: TrackContext) {
           BUFFER_LOADING: {
             actions: 'setLoadingState',
           },
-          BUFFER_READY: {
-            actions: 'setLoadedState',
-          },
+          BUFFER_READY: [
+            {
+              guard: ({ context }: { context: TrackContext }) => context.pendingPlay,
+              target: 'webaudio',
+              actions: ['clearPendingPlay', 'setPlayingWebAudio', 'startSourceNode', 'startProgressLoop'],
+            },
+            {
+              actions: 'setLoadedState',
+            },
+          ],
           BUFFER_ERROR: {
-            actions: 'setErrorState',
+            actions: ['setErrorState', 'clearPendingPlay'],
           },
           URL_RESOLVED: {
             actions: 'setResolvedUrl',
@@ -289,13 +306,20 @@ export function createTrackMachine(initialContext: TrackContext) {
           BUFFER_LOADING: {
             actions: 'setLoadingState',
           },
-          BUFFER_READY: {
-            target: 'idle',
-            actions: 'setLoadedState',
-          },
+          BUFFER_READY: [
+            {
+              guard: ({ context }: { context: TrackContext }) => context.pendingPlay,
+              target: 'webaudio',
+              actions: ['clearPendingPlay', 'setPlayingWebAudio', 'startSourceNode', 'startProgressLoop'],
+            },
+            {
+              target: 'idle',
+              actions: 'setLoadedState',
+            },
+          ],
           BUFFER_ERROR: {
             target: 'idle',
-            actions: 'setErrorState',
+            actions: ['setErrorState', 'clearPendingPlay'],
           },
           PLAY: [
             {
@@ -306,6 +330,10 @@ export function createTrackMachine(initialContext: TrackContext) {
                 'startSourceNode',
                 'startProgressLoop',
               ],
+            },
+            {
+              guard: 'isWebAudioOnly',
+              actions: ['setPendingPlay', 'triggerFetchForPendingPlay'],
             },
             {
               target: 'html5',

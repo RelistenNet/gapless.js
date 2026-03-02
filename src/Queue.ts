@@ -14,10 +14,7 @@ import { createQueueMachine } from './machines/queue.machine';
 import { Track } from './Track';
 import type { TrackQueueRef } from './Track';
 import { throttle } from './utils/throttle';
-import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata } from './types';
-
-/** Maximum number of tracks to preload ahead of the current track. */
-const PRELOAD_AHEAD = 2;
+import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata, PlaybackMethod } from './types';
 
 export class Queue implements TrackQueueRef {
   private _tracks: Track[] = [];
@@ -32,16 +29,18 @@ export class Queue implements TrackQueueRef {
   private readonly _onPlayBlocked?: () => void;
   private readonly _onDebug?: (msg: string) => void;
 
-  readonly webAudioIsDisabled: boolean;
+  readonly playbackMethod: PlaybackMethod;
 
   private _volume: number;
+  private _preloadNumTracks: number;
+  private _playbackRate: number;
 
   /** Index of the next track with a pre-scheduled gapless start, or null. */
   private _scheduledNextIndex: number | null = null;
 
   private _throttledUpdatePositionState = throttle(
-    (duration: number, currentTime: number) =>
-      updateMediaSessionPositionState(duration, currentTime),
+    (duration: number, currentTime: number, playbackRate: number) =>
+      updateMediaSessionPositionState(duration, currentTime, playbackRate),
     1000,
   );
 
@@ -56,13 +55,17 @@ export class Queue implements TrackQueueRef {
       onError,
       onPlayBlocked,
       onDebug,
-      webAudioIsDisabled = false,
+      playbackMethod = 'HYBRID',
       trackMetadata = [],
       volume: initialVolume = 1,
+      preloadNumTracks = 2,
+      playbackRate: initialPlaybackRate = 1,
     } = options;
 
     this._volume = Math.min(1, Math.max(0, initialVolume));
-    this.webAudioIsDisabled = webAudioIsDisabled;
+    this._preloadNumTracks = Math.max(0, preloadNumTracks);
+    this._playbackRate = Math.min(4, Math.max(0.25, initialPlaybackRate));
+    this.playbackMethod = playbackMethod;
     this._onProgress = onProgress;
     this._onEnded = onEnded;
     this._onPlayNextTrack = onPlayNextTrack;
@@ -246,6 +249,17 @@ export class Queue implements TrackQueueRef {
     for (const track of this._tracks) track.setVolume(clamped);
   }
 
+  setPlaybackRate(rate: number): void {
+    const clamped = Math.min(4, Math.max(0.25, rate));
+    this._playbackRate = clamped;
+    this._currentTrack?.setPlaybackRate(clamped);
+    this._cancelScheduledGapless();
+    const snap = this._actor.getSnapshot();
+    if (snap.value === 'playing') {
+      this._tryScheduleGapless(snap.context.currentTrackIndex);
+    }
+  }
+
   addTrack(url: string, options: AddTrackOptions = {}): void {
     const index = this._tracks.length;
     const metadata = options.metadata ?? ({} as TrackMetadata);
@@ -314,6 +328,22 @@ export class Queue implements TrackQueueRef {
     return this._volume;
   }
 
+  get preloadNumTracks(): number {
+    return this._preloadNumTracks;
+  }
+
+  set preloadNumTracks(value: number) {
+    this._preloadNumTracks = Math.max(0, value);
+    const snap = this._actor.getSnapshot();
+    if (snap.value === 'playing') {
+      this._preloadAhead(snap.context.currentTrackIndex);
+    }
+  }
+
+  get playbackRate(): number {
+    return this._playbackRate;
+  }
+
   /** Snapshot of the queue state machine (state name + context). For debugging. */
   get queueSnapshot(): { state: string; context: { currentTrackIndex: number; trackCount: number } } {
     const snap = this._actor.getSnapshot();
@@ -347,7 +377,7 @@ export class Queue implements TrackQueueRef {
   onProgress(info: TrackInfo): void {
     if (info.index !== this._actor.getSnapshot().context.currentTrackIndex) return;
     if (!isNaN(info.duration)) {
-      this._throttledUpdatePositionState(info.duration, info.currentTime);
+      this._throttledUpdatePositionState(info.duration, info.currentTime, this._playbackRate);
     }
     this._onProgress?.(info);
   }
@@ -393,7 +423,7 @@ export class Queue implements TrackQueueRef {
         return;
       }
     }
-    const limit = fromIndex + PRELOAD_AHEAD + 1;
+    const limit = fromIndex + this._preloadNumTracks + 1;
     this.onDebug(`_preloadAhead(${fromIndex}) limit=${limit} trackCount=${this._tracks.length}`);
     for (let i = fromIndex + 1; i < this._tracks.length && i < limit; i++) {
       const t = this._tracks[i];
@@ -419,7 +449,7 @@ export class Queue implements TrackQueueRef {
 
   private _tryScheduleGapless(curIndex: number): void {
     const ctx = getAudioContext();
-    if (!ctx || this.webAudioIsDisabled) return;
+    if (!ctx || this.playbackMethod === 'HTML5_ONLY') return;
 
     const nextIndex = curIndex + 1;
     if (nextIndex >= this._tracks.length) return;
@@ -451,10 +481,10 @@ export class Queue implements TrackQueueRef {
     if (isNaN(duration)) return null;
 
     if (track.scheduledStartContextTime !== null) {
-      return track.scheduledStartContextTime + duration;
+      return track.scheduledStartContextTime + duration / this._playbackRate;
     }
 
-    const remaining = duration - track.currentTime;
+    const remaining = (duration - track.currentTime) / this._playbackRate;
     if (remaining <= 0) return null;
     return ctx.currentTime + remaining;
   }

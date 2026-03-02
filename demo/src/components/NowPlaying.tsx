@@ -16,6 +16,8 @@ interface NowPlayingProps {
   onSeek: (time: number) => void;
   onSeekToEnd: () => void;
   onVolumeChange: (v: number) => void;
+  playbackRate: number;
+  onPlaybackRateChange: (rate: number) => void;
 }
 
 export function NowPlaying({
@@ -28,6 +30,8 @@ export function NowPlaying({
   onSeek,
   onSeekToEnd,
   onVolumeChange,
+  playbackRate,
+  onPlaybackRateChange,
 }: NowPlayingProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -77,6 +81,17 @@ export function NowPlaying({
             max="100"
             value={Math.round(volume * 100)}
             onChange={(e) => onVolumeChange(Number(e.target.value) / 100)}
+          />
+        </label>
+        <label>
+          {playbackRate.toFixed(2)}x{' '}
+          <input
+            type="range"
+            min="25"
+            max="400"
+            step="25"
+            value={Math.round(playbackRate * 100)}
+            onChange={(e) => onPlaybackRateChange(Number(e.target.value) / 100)}
           />
         </label>
       </div>

@@ -269,7 +269,7 @@ function runFuzzScenario(
   trackCounter = 0;
   const rand = mulberry32(seed);
   const urls = Array.from({ length: initialTracks }, (_, i) => `track-${i}.mp3`);
-  const queue = new Queue({ tracks: urls, webAudioIsDisabled: true });
+  const queue = new Queue({ tracks: urls, playbackMethod: 'HTML5_ONLY' });
 
   try {
     checkInvariants(queue, 'initial', seed);
@@ -528,7 +528,7 @@ describe('Bug regressions', () => {
   // the current track or a track after it, leaving the index out of bounds.
   describe('removeTrack clamps currentTrackIndex', () => {
     it('removing the last track when it is current clamps index', () => {
-      const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], playbackMethod: 'HTML5_ONLY' });
       // Navigate to last track
       q.gotoTrack(2, true);
       expect(q.queueSnapshot.context.currentTrackIndex).toBe(2);
@@ -543,7 +543,7 @@ describe('Bug regressions', () => {
     });
 
     it('removing the only track leaves index at 0', () => {
-      const q = new Queue({ tracks: ['a.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.removeTrack(0);
       const snap = q.queueSnapshot;
       expect(snap.context.trackCount).toBe(0);
@@ -552,7 +552,7 @@ describe('Bug regressions', () => {
     });
 
     it('removing a track after current does not push index out of bounds', () => {
-      const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.gotoTrack(1, true);
       expect(q.queueSnapshot.context.currentTrackIndex).toBe(1);
 
@@ -566,7 +566,7 @@ describe('Bug regressions', () => {
     it('successive removals of last track keep index in bounds', () => {
       const q = new Queue({
         tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'],
-        webAudioIsDisabled: true,
+        playbackMethod: 'HTML5_ONLY',
       });
       q.gotoTrack(3, true);
 
@@ -591,7 +591,7 @@ describe('Bug regressions', () => {
     it('does not advance when a removed track fires onTrackEnded', () => {
       const q = new Queue({
         tracks: ['a.mp3', 'b.mp3', 'c.mp3'],
-        webAudioIsDisabled: true,
+        playbackMethod: 'HTML5_ONLY',
       });
       q.play();
 
@@ -619,7 +619,7 @@ describe('Bug regressions', () => {
   // Bug #5: advanceOnTrackEnd unconditionally incremented without bounds.
   describe('advanceOnTrackEnd stays in bounds', () => {
     it('TRACK_ENDED on last track transitions to ended state', () => {
-      const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.gotoTrack(1, true);
       expect(q.queueSnapshot.state).toBe('playing');
 
@@ -635,7 +635,7 @@ describe('Bug regressions', () => {
     });
 
     it('TRACK_ENDED on middle track advances to next', () => {
-      const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.gotoTrack(0, true);
       expect(q.queueSnapshot.state).toBe('playing');
 
@@ -655,7 +655,7 @@ describe('Bug regressions', () => {
     it('decrements when a track before it is removed', () => {
       const q = new Queue({
         tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'],
-        webAudioIsDisabled: true,
+        playbackMethod: 'HTML5_ONLY',
       });
 
       // Manually set _scheduledNextIndex to 3 (track D)
@@ -670,7 +670,7 @@ describe('Bug regressions', () => {
     it('nulls out when the scheduled track is removed', () => {
       const q = new Queue({
         tracks: ['a.mp3', 'b.mp3', 'c.mp3'],
-        webAudioIsDisabled: true,
+        playbackMethod: 'HTML5_ONLY',
       });
       (q as unknown as { _scheduledNextIndex: number | null })._scheduledNextIndex = 1;
 
@@ -682,7 +682,7 @@ describe('Bug regressions', () => {
     it('stays unchanged when a track after it is removed', () => {
       const q = new Queue({
         tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'],
-        webAudioIsDisabled: true,
+        playbackMethod: 'HTML5_ONLY',
       });
       (q as unknown as { _scheduledNextIndex: number | null })._scheduledNextIndex = 1;
 
@@ -697,7 +697,7 @@ describe('Bug regressions', () => {
   // playing/paused state with 0 tracks instead of transitioning to idle.
   describe('removing all tracks transitions to idle', () => {
     it('playing → idle when last track removed', () => {
-      const q = new Queue({ tracks: ['a.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.play();
       expect(q.queueSnapshot.state).toBe('playing');
 
@@ -708,7 +708,7 @@ describe('Bug regressions', () => {
     });
 
     it('paused → idle when last track removed', () => {
-      const q = new Queue({ tracks: ['a.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.play();
       q.pause();
       expect(q.queueSnapshot.state).toBe('paused');
@@ -720,7 +720,7 @@ describe('Bug regressions', () => {
     });
 
     it('playing with 3 tracks → idle after removing all', () => {
-      const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.play();
       expect(q.queueSnapshot.state).toBe('playing');
 
@@ -734,7 +734,7 @@ describe('Bug regressions', () => {
     });
 
     it('removing current track while playing continues with next', () => {
-      const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.gotoTrack(1, true);
       expect(q.queueSnapshot.state).toBe('playing');
       expect(q.queueSnapshot.context.currentTrackIndex).toBe(1);
@@ -752,7 +752,7 @@ describe('Bug regressions', () => {
   // in ended even though there were now playable tracks after currentTrackIndex.
   describe('addTrack in ended state transitions to paused', () => {
     it('ended → paused when track added', () => {
-      const q = new Queue({ tracks: ['a.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.play();
       const track = getTracks(q)[0];
       q.onTrackEnded(track as never);
@@ -765,7 +765,7 @@ describe('Bug regressions', () => {
     });
 
     it('can play after adding track to ended queue', () => {
-      const q = new Queue({ tracks: ['a.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.play();
       const track = getTracks(q)[0];
       q.onTrackEnded(track as never);
@@ -778,7 +778,7 @@ describe('Bug regressions', () => {
     });
 
     it('multiple adds in ended state all succeed', () => {
-      const q = new Queue({ tracks: ['a.mp3'], webAudioIsDisabled: true });
+      const q = new Queue({ tracks: ['a.mp3'], playbackMethod: 'HTML5_ONLY' });
       q.play();
       const track = getTracks(q)[0];
       q.onTrackEnded(track as never);
