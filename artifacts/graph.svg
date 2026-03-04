@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 495 144" width="495" height="144">
+  <style>
+    text {
+      font-family: 'SFMono-Regular', Menlo, Monaco, 'Courier New', monospace;
+      font-size: 14px;
+      line-height: 1;
+      fill: #24292f;
+    }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #e6edf3; }
+      .bg { fill: #161b22; }
+    }
+  </style>
+  <rect class="bg" width="100%" height="100%" fill="#f6f8fa" rx="6" />
+  <text x="16" y="30" xml:space="preserve"></text>
+  <text x="16" y="44" xml:space="preserve">╔══ Track One ══╗               ╔══ Track Two ══════╗</text>
+  <text x="16" y="58" xml:space="preserve">║               ║░░             ║                   ║░░</text>
+  <text x="16" y="72" xml:space="preserve">║ Instant HTML5 ║░── preload ──▶║ Gapless Web Audio ║░░</text>
+  <text x="16" y="86" xml:space="preserve">║               ║░░             ║                   ║░░</text>
+  <text x="16" y="100" xml:space="preserve">╚═══════════════╝░░             ╚═══════════════════╝░░</text>
+  <text x="16" y="114" xml:space="preserve"> ░░░░░░░░░░░░░░░░░░              ░░░░░░░░░░░░░░░░░░░░░░</text>
+  <text x="16" y="128" xml:space="preserve"></text>
+</svg>

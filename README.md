@@ -1,4 +1,9 @@
-# gapless.js
+![gapless.js diagram](./artifacts/graph.svg)
+
+# Gapless.js
+
+[![CI](https://github.com/RelistenNet/gapless.js/actions/workflows/ci.yml/badge.svg)](https://github.com/RelistenNet/gapless.js/actions/workflows/ci.yml)
+[![Bundle Size](https://deno.bundlejs.com/badge?q=gapless&treeshake=[{+default+}])](https://bundlejs.com/?q=gapless&treeshake=[{+default+}])
 
 Gapless audio player for the web. Takes an array of audio tracks and uses HTML5 audio with the Web Audio API to enable seamless, gapless transitions between tracks.
 
