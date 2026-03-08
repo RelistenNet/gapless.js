@@ -2,7 +2,7 @@
 // TrackMachine — state-transition tests (xstate v5)
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createActor } from 'xstate';
 import { createTrackMachine } from '../../src/machines/track.machine';
 import type { TrackContext } from '../../src/machines/track.machine';
@@ -86,6 +86,25 @@ describe('TrackMachine', () => {
       expect(a.getSnapshot().value).toBe('webaudio');
       expect(a.getSnapshot().context.isPlaying).toBe(true);
       expect(a.getSnapshot().context.playbackType).toBe('WEBAUDIO');
+    });
+
+    it('DEACTIVATE in idle runs pauseHtml5 action', () => {
+      // After HTML5_ENDED → idle, DEACTIVATE should pause the HTML5 element
+      // as a safety net for spurious ended events
+      const pauseHtml5 = vi.fn();
+      const machine = createTrackMachine(makeCtx()).provide({
+        actions: { pauseHtml5 },
+      });
+      const a = createActor(machine);
+      a.start();
+      // Go to html5, then end → idle
+      a.send({ type: 'PLAY' });
+      a.send({ type: 'HTML5_ENDED' });
+      expect(a.getSnapshot().value).toBe('idle');
+      pauseHtml5.mockClear();
+      // Now DEACTIVATE from idle should call pauseHtml5
+      a.send({ type: 'DEACTIVATE' });
+      expect(pauseHtml5).toHaveBeenCalled();
     });
   });
 

@@ -16,6 +16,8 @@ import type { TrackQueueRef } from './Track';
 import { throttle } from './utils/throttle';
 import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata, PlaybackMethod } from './types';
 
+const MAX_SCHEDULE_LOOKAHEAD = 5;
+
 export class Queue implements TrackQueueRef {
   private _tracks: Track[] = [];
   private readonly _actor;
@@ -470,7 +472,18 @@ export class Queue implements TrackQueueRef {
 
     if (endTime < ctx.currentTime + 0.01) return;
 
+    const timeUntilEnd = endTime - ctx.currentTime;
+    if (current.playbackType === 'HTML5' && timeUntilEnd > MAX_SCHEDULE_LOOKAHEAD) {
+      this.onDebug(
+        `_tryScheduleGapless: deferring — HTML5 track ${curIndex} has ${timeUntilEnd.toFixed(1)}s remaining (max lookahead=${MAX_SCHEDULE_LOOKAHEAD}s)`
+      );
+      return;
+    }
+
     next.scheduleGaplessStart(endTime);
+    this.onDebug(
+      `_tryScheduleGapless: scheduled track ${nextIndex} at endTime=${endTime.toFixed(3)} (in ${(endTime - ctx.currentTime).toFixed(1)}s) curPlaybackType=${current.playbackType}`
+    );
     this._scheduledNextIndex = nextIndex;
   }
 

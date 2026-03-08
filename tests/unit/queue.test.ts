@@ -1642,3 +1642,79 @@ describe('Queue autoplay blocked', () => {
     q.destroy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gapless scheduling lookahead guard for HTML5 tracks
+// ---------------------------------------------------------------------------
+describe('Queue gapless scheduling lookahead guard', () => {
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+    playbackType: string;
+    scheduledStartContextTime: number | null;
+  };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
+
+  it('defers scheduling when HTML5 track has >5s remaining', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    // Play track 0 as HTML5 (no injected buffer), then inject buffer after
+    // play so it stays HTML5 but has a buffer for timing
+    q.play();
+    injectBuffer(q, 0, 300);
+    const internal = q as unknown as InternalQueue;
+    // Set HTML5 audio to have lots of time remaining
+    (internal._tracks[0].audio as unknown as MockAudioElement).duration = 300;
+    (internal._tracks[0].audio as unknown as MockAudioElement).currentTime = 0;
+
+    // Let fetch+decode finish so track 1's buffer is ready
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    // Track 0 should be HTML5
+    expect(q.tracks[0].playbackType).toBe('HTML5');
+    // Even though both buffers are ready, scheduling should be deferred
+    // because HTML5 track has 300s remaining (>5s lookahead)
+    expect(internal._scheduledNextIndex).toBeNull();
+  });
+
+  it('schedules when HTML5 track has <=5s remaining', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    injectBuffer(q, 0, 100);
+    const internal = q as unknown as InternalQueue;
+    // Set HTML5 audio near the end (duration=100, currentTime=97 → 3s left)
+    (internal._tracks[0].audio as unknown as MockAudioElement).duration = 100;
+    (internal._tracks[0].audio as unknown as MockAudioElement).currentTime = 97;
+
+    // Let fetch+decode finish
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    // Track 0 should be HTML5
+    expect(q.tracks[0].playbackType).toBe('HTML5');
+    // With <=5s remaining, scheduling should succeed
+    expect(internal._scheduledNextIndex).toBe(1);
+    expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
+  });
+
+  it('does not apply lookahead guard to WebAudio→WebAudio scheduling', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    // Inject buffer into track 0 so it plays via WebAudio (single clock, no drift)
+    injectBuffer(q, 0, 300);
+    q.play();
+
+    // Let fetch+decode finish for track 1
+    await new Promise(r => setTimeout(r, 0));
+
+    const internal = q as unknown as InternalQueue;
+    // WebAudio track with 300s remaining should still be scheduled (no guard)
+    expect(internal._scheduledNextIndex).toBe(1);
+    expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
+  });
+});

@@ -169,6 +169,7 @@ export function createTrackMachine(initialContext: TrackContext) {
           },
           DEACTIVATE: {
             actions: [
+              'pauseHtml5',
               'resetHtml5Element',
               'resetTiming',
               'stopProgressLoop',
