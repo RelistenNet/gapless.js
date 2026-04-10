@@ -186,12 +186,37 @@ describe('Track duration', () => {
     expect(t.duration).toBeCloseTo(245.5);
   });
 
-  it('prefers audioBuffer.duration over html5 duration', () => {
+  it('prefers audioBuffer.duration over html5 duration in idle state', () => {
     const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
     const audio = t.audio as unknown as MockAudioElement;
     audio.duration = 100;
     t.audioBuffer = new MockAudioBuffer(245.5) as unknown as AudioBuffer;
     expect(t.duration).toBeCloseTo(245.5);
+  });
+
+  it('uses html5 duration in html5 state to stay consistent with currentTime', () => {
+    // When playing via HTML5, duration must match the audio.currentTime clock.
+    // audioBuffer.duration can differ (codec padding, VBR headers), which
+    // causes gapless scheduling to start the next track too early or late.
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const audio = t.audio as unknown as MockAudioElement;
+    audio.duration = 300.5; // HTML5 reports slightly longer duration
+    t.audioBuffer = new MockAudioBuffer(300.0) as unknown as AudioBuffer;
+
+    // In idle state, prefers audioBuffer.duration
+    expect(t.duration).toBeCloseTo(300.0);
+
+    // Play starts in HTML5 mode (HYBRID, no WebAudio context ready yet... actually
+    // with mock context, play() goes to WebAudio. So simulate HTML5 state:)
+    // We need to play WITHOUT a buffer to enter html5 state, then load the buffer.
+    t.audioBuffer = null;
+    t.play(); // enters html5 state
+    expect(t.machineState).toBe('html5');
+
+    // Buffer arrives while HTML5 is playing (normal HYBRID flow)
+    t.audioBuffer = new MockAudioBuffer(300.0) as unknown as AudioBuffer;
+    // duration should use audio.duration (300.5) not audioBuffer.duration (300.0)
+    expect(t.duration).toBeCloseTo(300.5);
   });
 });
 

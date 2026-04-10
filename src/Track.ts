@@ -325,6 +325,14 @@ export class Track {
   }
 
   get duration(): number {
+    const snap = this._actor.getSnapshot();
+    // When playing via HTML5, use audio.duration so it stays consistent
+    // with audio.currentTime. audioBuffer.duration can differ (codec padding,
+    // container overhead, VBR headers) causing gapless scheduling to start
+    // the next track before the HTML5 element actually finishes.
+    if (snap.value === 'html5' && !isNaN(this.audio.duration)) {
+      return this.audio.duration;
+    }
     if (this.audioBuffer) return this.audioBuffer.duration;
     return this.audio.duration;
   }
