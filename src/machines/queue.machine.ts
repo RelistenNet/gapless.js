@@ -277,9 +277,20 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: ['deactivateEndedTrack', 'notifyEnded'],
             },
           ],
-          TRACK_LOADED: {
-            actions: ['scheduleGapless', 'preloadAhead'],
-          },
+          TRACK_LOADED: [
+            {
+              // When the *current* track's buffer becomes ready while we are
+              // already playing, that's a mid-stream HTML5 → Web Audio
+              // crossover. Any existing gapless schedule was based on the old
+              // HTML5-clock end-time prediction; cancel and re-schedule using
+              // the now-authoritative WebAudio end time.
+              guard: ({ context, event }) => event.index === context.currentTrackIndex,
+              actions: ['cancelAndRescheduleGapless', 'preloadAhead'],
+            },
+            {
+              actions: ['scheduleGapless', 'preloadAhead'],
+            },
+          ],
         },
       },
 

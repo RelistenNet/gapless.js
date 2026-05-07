@@ -953,9 +953,23 @@ describe('Queue preloading', () => {
     expect(tracks[1].isBufferLoaded).toBe(false);
   });
 
-  it('does not double-fetch the current (HTML5) track', () => {
+  it('fetches the current track on play() so it can crossover to Web Audio mid-stream', () => {
+    // Mid-stream HTML5→WebAudio crossover requires the current track's buffer
+    // to actually decode. So in HYBRID mode, play() kicks off START_FETCH for
+    // the current track in addition to playing it via HTML5.
     const fetchSpy = mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    q.play();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    expect(urls.some((u: string) => u.includes('a.mp3'))).toBe(true);
+  });
+
+  it('does not fetch the current track in HTML5_ONLY mode', () => {
+    // Sanity check the inverse: when the user has explicitly opted into
+    // HTML5-only, we must NOT fetch buffers for the current track.
+    const fetchSpy = mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], playbackMethod: 'HTML5_ONLY' });
     q.play();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
@@ -1016,20 +1030,21 @@ describe('Queue preloading', () => {
     expect((q as unknown as InternalQueue)._scheduledNextIndex).toBe(1);
   });
 
-  it('preloads at most PRELOAD_AHEAD (2) tracks beyond current', async () => {
+  it('preloads at most PRELOAD_AHEAD (2) tracks beyond current once past the speculative-load threshold', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
     injectBuffer(q, 0, 180);
     q.play();
+    // Advance ctx time past the 15s threshold so further-ahead tracks (i > fromIndex+1)
+    // are no longer deferred. Track 0 plays via Web Audio (injected buffer), so its
+    // currentTime is driven by ctx.currentTime.
+    advanceTime(20);
     // Let all fetch+decode promises settle
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
-    // Track 0: current (plays via HTML5, not buffer-preloaded)
-    // Track 1: preloaded (1 ahead)
+    // Track 1: preloaded (1 ahead, immediate next — never deferred)
     expect(tracks[1].isBufferLoaded).toBe(true);
-    // Track 2: preloaded (2 ahead)
+    // Track 2: preloaded (2 ahead, after threshold)
     expect(tracks[2].isBufferLoaded).toBe(true);
     // Track 3: NOT preloaded (beyond PRELOAD_AHEAD)
     expect(tracks[3].isBufferLoaded).toBe(false);
@@ -1042,15 +1057,13 @@ describe('Queue preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
     injectBuffer(q, 0, 180);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    advanceTime(20);
+    for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     // Advance to track 1
     q.next();
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    advanceTime(20);
+    for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
     // Track 3 should now be preloaded (2 ahead of track 1)
     expect(tracks[3].isBufferLoaded).toBe(true);
     // Track 4 should still NOT be preloaded (beyond 2 ahead)
@@ -1143,28 +1156,29 @@ describe('Queue deferred preloading', () => {
   };
   type InternalQueue = { _tracks: InternalTrack[] };
 
-  it('does not preload next track immediately when current is HTML5 and < 15s', async () => {
+  it('does not preload next track synchronously at play() — deferred while current is HTML5', () => {
+    // Synchronously after q.play(), track 0 has only just entered html5 state.
+    // _preloadAhead's HTML5+below-threshold guard defers next-track preload.
+    // (Once track 0's own fetch completes and BUFFER_READY triggers crossover,
+    // preloadAhead is re-run and the next track loads — covered by the
+    // "preloads next track once the current track has crossed over" test.)
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     q.play();
-    await new Promise(r => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     expect(tracks[1].isBufferLoaded).toBe(false);
   });
 
-  it('preloads next track after current track reaches 15s', async () => {
+  it('preloads next track once the current track has crossed over to Web Audio', async () => {
+    // After mid-stream crossover, the current track's decode also triggers
+    // onTrackBufferReady → TRACK_LOADED → _preloadAhead, and at that point
+    // the HTML5 deferral guard no longer applies (track is now WebAudio).
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
-    // Simulate audio.currentTime reaching 15s
-    (tracks[0].audio as unknown as MockAudioElement).currentTime = 15;
-    (tracks[0].audio as unknown as MockAudioElement).duration = 180;
-    // Trigger the rAF progress loop
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    expect(tracks[0].playbackType).toBe('WEBAUDIO');
     expect(tracks[1].isBufferLoaded).toBe(true);
   });
 
@@ -1175,27 +1189,6 @@ describe('Queue deferred preloading', () => {
     q.play();
     await new Promise(r => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
-    expect(tracks[1].isBufferLoaded).toBe(true);
-  });
-
-  it('preloads short track at 20% of duration instead of 15s', async () => {
-    mockFetchSuccess();
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
-    q.play();
-    await new Promise(r => setTimeout(r, 0));
-    const tracks = (q as unknown as InternalQueue)._tracks;
-    // 30s track → threshold = min(30*0.2, 15) = 6s
-    (tracks[0].audio as unknown as MockAudioElement).duration = 30;
-    // At 5s — still under 20% threshold
-    (tracks[0].audio as unknown as MockAudioElement).currentTime = 5;
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    expect(tracks[1].isBufferLoaded).toBe(false);
-    // At 6s — reaches 20% threshold
-    (tracks[0].audio as unknown as MockAudioElement).currentTime = 6;
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
     expect(tracks[1].isBufferLoaded).toBe(true);
   });
 
@@ -1656,48 +1649,23 @@ describe('Queue gapless scheduling lookahead guard', () => {
   };
   type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
-  it('defers scheduling when HTML5 track has >5s remaining', async () => {
+  // Note: the prior tests for the HTML5 lookahead guard (>5s remaining defers,
+  // <=5s schedules) targeted a scenario that mid-stream crossover has rendered
+  // unreachable in HYBRID mode — once the buffer is ready, the track is
+  // promoted to Web Audio rather than staying HTML5. The guard is retained as
+  // defence-in-depth in _tryScheduleGapless but the HYBRID-mode path through
+  // it is no longer observable from public API.
+  it('crossover promotes the current track so gapless scheduling is WebAudio→WebAudio', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
-    // Play track 0 as HTML5 (no injected buffer), then inject buffer after
-    // play so it stays HTML5 but has a buffer for timing
     q.play();
-    injectBuffer(q, 0, 300);
     const internal = q as unknown as InternalQueue;
-    // Set HTML5 audio to have lots of time remaining
     (internal._tracks[0].audio as unknown as MockAudioElement).duration = 300;
     (internal._tracks[0].audio as unknown as MockAudioElement).currentTime = 0;
 
-    // Let fetch+decode finish so track 1's buffer is ready
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0));
 
-    // Track 0 should be HTML5
-    expect(q.tracks[0].playbackType).toBe('HTML5');
-    // Even though both buffers are ready, scheduling should be deferred
-    // because HTML5 track has 300s remaining (>5s lookahead)
-    expect(internal._scheduledNextIndex).toBeNull();
-  });
-
-  it('schedules when HTML5 track has <=5s remaining', async () => {
-    mockFetchSuccess();
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
-    q.play();
-    injectBuffer(q, 0, 100);
-    const internal = q as unknown as InternalQueue;
-    // Set HTML5 audio near the end (duration=100, currentTime=97 → 3s left)
-    (internal._tracks[0].audio as unknown as MockAudioElement).duration = 100;
-    (internal._tracks[0].audio as unknown as MockAudioElement).currentTime = 97;
-
-    // Let fetch+decode finish
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-
-    // Track 0 should be HTML5
-    expect(q.tracks[0].playbackType).toBe('HTML5');
-    // With <=5s remaining, scheduling should succeed
+    expect(q.tracks[0].playbackType).toBe('WEBAUDIO');
     expect(internal._scheduledNextIndex).toBe(1);
     expect(internal._tracks[1].scheduledStartContextTime).not.toBeNull();
   });

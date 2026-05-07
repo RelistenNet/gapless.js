@@ -71,12 +71,15 @@ describe('TrackMachine', () => {
       expect(a.getSnapshot().context.webAudioLoadingState).toBe('ERROR');
     });
 
-    it('full cycle: html5 → BUFFER_READY → DEACTIVATE → idle → PLAY_WEBAUDIO → webaudio', () => {
+    it('full cycle: html5 → BUFFER_READY (crossover) → DEACTIVATE → idle → PLAY_WEBAUDIO', () => {
       const a = actorAt(makeCtx(), 'html5');
-      // Buffer loads while playing HTML5
+      // Buffer loads while playing HTML5 — mid-stream crossover hands
+      // playback off to Web Audio immediately.
       a.send({ type: 'BUFFER_READY' });
-      expect(a.getSnapshot().value).toBe('html5');
+      expect(a.getSnapshot().value).toBe('webaudio');
       expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      expect(a.getSnapshot().context.playbackType).toBe('WEBAUDIO');
+      expect(a.getSnapshot().context.isPlaying).toBe(true);
       // Track gets deactivated (e.g. user skips away)
       a.send({ type: 'DEACTIVATE' });
       expect(a.getSnapshot().value).toBe('idle');
@@ -123,13 +126,33 @@ describe('TrackMachine', () => {
       expect(a.getSnapshot().context.isPlaying).toBe(true);
     });
 
-    // Bug #2 regression: BUFFER_READY in html5 stays in html5
-    it('BUFFER_READY in html5 stays in html5 and updates webAudioLoadingState', () => {
+    // BUFFER_READY in html5 performs a mid-stream crossover to Web Audio.
+    // This eliminates the HTML5→WebAudio gapless prediction problem: once
+    // the current track is on the AudioContext clock, all future gapless
+    // transitions are WebAudio→WebAudio and sample-accurate by construction.
+    it('BUFFER_READY in html5 crosses over to webaudio mid-stream', () => {
       const a = actorAt(makeCtx(), 'html5');
       a.send({ type: 'BUFFER_READY' });
-      expect(a.getSnapshot().value).toBe('html5');
+      expect(a.getSnapshot().value).toBe('webaudio');
       expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
-      expect(a.getSnapshot().context.playbackType).toBe('HTML5');
+      expect(a.getSnapshot().context.playbackType).toBe('WEBAUDIO');
+      // isPlaying is preserved from the html5 state (true when playing)
+      expect(a.getSnapshot().context.isPlaying).toBe(true);
+      // notifiedLookahead is cleared so the webaudio progress loop can
+      // re-trigger gapless scheduling with accurate shared-clock timing
+      expect(a.getSnapshot().context.notifiedLookahead).toBe(false);
+    });
+
+    it('BUFFER_READY in html5 while paused crosses over with isPlaying=false', () => {
+      const a = actorAt(makeCtx(), 'html5');
+      a.send({ type: 'PAUSE' });
+      expect(a.getSnapshot().context.isPlaying).toBe(false);
+      a.send({ type: 'BUFFER_READY' });
+      expect(a.getSnapshot().value).toBe('webaudio');
+      expect(a.getSnapshot().context.playbackType).toBe('WEBAUDIO');
+      // isPlaying remains false — paused tracks cross over but don't start
+      // the source node; the next PLAY in webaudio will resume from offset
+      expect(a.getSnapshot().context.isPlaying).toBe(false);
     });
 
     it('stays html5 on BUFFER_ERROR but marks loading state as ERROR', () => {
@@ -297,20 +320,22 @@ describe('TrackMachine', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Invariant: "Web Audio always wins eventually"
+  // Invariant: "Web Audio always wins as soon as the buffer is ready"
   //
-  // Once a track's buffer decodes (BUFFER_READY), webAudioLoadingState must
-  // reach 'LOADED' and stay there through any deactivate/reactivate cycle, so
-  // the next play() can use Web Audio. We do NOT switch mid-stream — a track
-  // playing HTML5 stays on HTML5 until the next play().
+  // Once a track's buffer decodes (BUFFER_READY), the track moves to Web
+  // Audio — mid-stream if it was playing, immediately if it was idle or
+  // loading. webAudioLoadingState must reach 'LOADED' and stay there
+  // through any deactivate/reactivate cycle, so the next play() can use
+  // Web Audio without re-decoding.
   // ---------------------------------------------------------------------------
-  describe('invariant: Web Audio always wins eventually', () => {
-    it('buffer ready while in html5 → deactivate → re-play uses Web Audio', () => {
+  describe('invariant: Web Audio always wins as soon as the buffer is ready', () => {
+    it('buffer ready while in html5 → mid-stream crossover → deactivate → re-play', () => {
       const a = actorAt(makeCtx(), 'html5');
       a.send({ type: 'BUFFER_READY' });
-      // Stays in html5 (no mid-stream switch)
-      expect(a.getSnapshot().value).toBe('html5');
+      // Mid-stream crossover: already in webaudio
+      expect(a.getSnapshot().value).toBe('webaudio');
       expect(a.getSnapshot().context.webAudioLoadingState).toBe('LOADED');
+      expect(a.getSnapshot().context.playbackType).toBe('WEBAUDIO');
       // Deactivate (user skips away)
       a.send({ type: 'DEACTIVATE' });
       expect(a.getSnapshot().value).toBe('idle');

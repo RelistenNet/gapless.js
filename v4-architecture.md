@@ -283,8 +283,8 @@ Each Track has its own machine managing its playback backend and loading state.
 
 **Key transitions:**
 
-- `BUFFER_READY` in `html5` — stays in `html5`, just marks the buffer as loaded. The switchover to `webaudio` only happens via an explicit `PLAY_WEBAUDIO`.
-- `BUFFER_READY` in `loading` — stays in `loading`. The track waits for the Queue to decide when to play it.
+- `BUFFER_READY` in `html5` — **mid-stream crossover to `webaudio`.** The HTML5 element is paused, an `AudioBufferSourceNode` is started at the exact offset the HTML5 element was at, and the track enters `webaudio` state with `isPlaying` preserved. This is essential for gapless correctness — once a track is on the AudioContext clock, all subsequent gapless transitions share a single clock and are sample-accurate by construction. The alternative (staying in HTML5 and predicting when it will end from the AudioContext clock) is the root cause of the gapless overlap bug: the two clocks drift independently (buffering stalls, codec padding, long-session skew), and any prediction across them is wrong some fraction of the time.
+- `BUFFER_READY` in `loading` — transitions to `idle` + LOADED. The track waits for the Queue to decide when to play it.
 - `DEACTIVATE` from `webaudio` — goes to `idle` (not `loading`), since the track is being swapped out.
 - `START_FETCH` — global event (handled in any state). When `webAudioLoadingState` is `NONE` and no fetch is in progress, spawns a `FetchDecodeMachine` child actor and sets `webAudioLoadingState` to `LOADING`.
 
@@ -329,22 +329,19 @@ Promise implementations (`resolveUrl`, `fetchAudio`, `decodeAudio`) are no-op de
 
 ## How Gapless Playback Works
 
-The core idea: schedule the next track's `AudioBufferSourceNode.start(when)` at the exact `AudioContext.currentTime` when the current track ends. Because all tracks share one `AudioContext`, the clock is monotonic and the transition is sample-accurate.
+The core idea: schedule the next track's `AudioBufferSourceNode.start(when)` at the exact `AudioContext.currentTime` when the current track ends. Because all tracks share one `AudioContext`, the clock is monotonic and the transition is sample-accurate — **but only if the current track is also playing through Web Audio**. If the current track is on HTML5, `audio.currentTime` and `ctx.currentTime` are independent clocks and any prediction across them is unreliable. The mid-stream crossover (see TrackMachine `BUFFER_READY` in `html5`) moves every track onto the AudioContext clock as soon as its buffer is decoded, so gapless scheduling is always WebAudio→WebAudio.
 
 ### Step by step
 
 1. **Preload**: When a track starts playing, the Queue calls `_preloadAhead()` to begin fetching and decoding the next 2 tracks. Each track spawns a `FetchDecodeMachine` child actor which runs: resolve URL → fetch → decode.
 
-2. **Schedule**: When the current track is within 5 seconds of its end and the next track's buffer is decoded, `_tryScheduleGapless()` computes the exact end time:
-   ```
-   endTime = current.scheduledStartContextTime + current.duration
-   // or, for the first track (HTML5-started):
-   endTime = ctx.currentTime + remaining
-   ```
+2. **Crossover (for the first track in a session)**: The first track starts on HTML5 for immediate playback. As soon as its buffer finishes decoding, `BUFFER_READY` triggers a mid-stream handoff: the HTML5 element is paused, a Web Audio source node is started at the exact `audio.currentTime` offset, and the track enters `webaudio` state. From this instant on, the track is on the AudioContext clock.
 
-3. **Start at precise time**: `next.scheduleGaplessStart(endTime)` creates a source node and calls `sourceNode.start(endTime, 0)`. The Web Audio scheduler guarantees the node begins at exactly that sample.
+3. **Schedule**: When the current track is within 5 seconds of its end and the next track's buffer is decoded, `_tryScheduleGapless()` computes the exact end time. For a track that was itself gapless-scheduled, this is `current.scheduledStartContextTime + current.duration`. For a track that was started via crossover (or normal `play()` into webaudio), it's `ctx.currentTime + remaining` where both terms are on the AudioContext clock — no cross-clock prediction.
 
-4. **Handoff**: When the current track's source node fires `onended`, the Queue advances `currentTrackIndex`. Since the next track was pre-scheduled, it's already playing — the Queue just starts its progress loop.
+4. **Start at precise time**: `next.scheduleGaplessStart(endTime)` creates a source node and calls `sourceNode.start(endTime, 0)`. The Web Audio scheduler guarantees the node begins at exactly that sample.
+
+5. **Handoff**: When the current track's source node fires `onended`, the Queue advances `currentTrackIndex`. Since the next track was pre-scheduled, it's already playing — the Queue just starts its progress loop.
 
 ### Fallback
 

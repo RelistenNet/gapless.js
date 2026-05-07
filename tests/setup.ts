@@ -58,17 +58,46 @@ export class MockAudioBufferSourceNode {
 // Mock GainNode
 // ---------------------------------------------------------------------------
 export class MockGainNode {
-  gain = { value: 1 };
+  gain = {
+    value: 1,
+    setValueAtTime: vi.fn(),
+    linearRampToValueAtTime: vi.fn(),
+    cancelScheduledValues: vi.fn(),
+  };
   connect = vi.fn();
   disconnect = vi.fn();
+}
+
+export class MockMediaElementAudioSourceNode {
+  connect = vi.fn();
+  disconnect = vi.fn();
+  constructor(public mediaElement: unknown) {}
 }
 
 // ---------------------------------------------------------------------------
 // Mock AudioBuffer
 // ---------------------------------------------------------------------------
 export class MockAudioBuffer {
+  /** Optional: simulate `paddingSec` of silence at the start, then full-amplitude content. */
+  paddingSec = 0;
+
   constructor(public duration: number, public numberOfChannels = 2, public sampleRate = 44100) {}
-  getChannelData = vi.fn(() => new Float32Array(Math.round(this.duration * this.sampleRate)));
+
+  get length(): number {
+    return Math.round(this.duration * this.sampleRate);
+  }
+
+  getChannelData = vi.fn((_channel: number) => {
+    const arr = new Float32Array(this.length);
+    const paddingSamples = Math.round(this.paddingSec * this.sampleRate);
+    // Samples [0..paddingSamples) stay 0 (silence). Subsequent samples fill
+    // with a non-zero value so the scan in _maybeComputeBufferAlignment
+    // detects the start of the music here.
+    for (let i = paddingSamples; i < arr.length; i++) {
+      arr[i] = 0.5;
+    }
+    return arr;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +111,7 @@ export class MockAudioContext {
 
   createBufferSource = vi.fn(() => new MockAudioBufferSourceNode());
   createGain = vi.fn(() => new MockGainNode());
+  createMediaElementSource = vi.fn((el: unknown) => new MockMediaElementAudioSourceNode(el));
   resume = vi.fn(() => Promise.resolve());
   suspend = vi.fn(() => Promise.resolve());
   close = vi.fn(() => Promise.resolve());
