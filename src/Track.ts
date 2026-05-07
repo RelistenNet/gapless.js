@@ -149,6 +149,17 @@ export class Track {
     // HTML5 Audio
     this.audio = new Audio();
     this.audio.preload = 'none';
+    // crossOrigin must be set BEFORE src for MediaElementAudioSourceNode to
+    // actually expose the element's audio to the AudioContext graph. Without
+    // it, even servers that DO send CORS headers result in the
+    // MediaElementSource being treated as cross-origin tainted, and the node
+    // outputs silence — manifesting as "HTML5 plays fine until WebAudio
+    // takes over, then suddenly audible". HTML5_ONLY mode skips this since
+    // it doesn't route through AudioContext; setting crossOrigin there
+    // would make non-CORS sources fail to load at all.
+    if (opts.queue.playbackMethod !== 'HTML5_ONLY') {
+      this.audio.crossOrigin = 'anonymous';
+    }
     this.audio.src = this._trackUrl;
     this.audio.volume = opts.queue.volume;
     this.audio.controls = false;
