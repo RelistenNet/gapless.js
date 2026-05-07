@@ -220,6 +220,125 @@ describe('Track duration', () => {
   });
 });
 
+describe('Track mid-stream HTML5 → Web Audio crossover', () => {
+  // Fundamental fix for the gapless overlap bug: when an HTML5 track's
+  // buffer finishes decoding, we immediately hand playback off to Web
+  // Audio. This eliminates the cross-clock prediction problem — from this
+  // point on, all gapless transitions are WebAudio→WebAudio on a single
+  // shared clock (AudioContext.currentTime), so scheduling is sample
+  // accurate by construction.
+
+  function sendBufferReady(t: Track): void {
+    (t as unknown as { _actor: { send: (e: { type: string }) => void } })._actor.send({
+      type: 'BUFFER_READY',
+    });
+  }
+
+  it('BUFFER_READY during HTML5 playback pauses HTML5 and starts WebAudio at offset', () => {
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const audio = t.audio as unknown as MockAudioElement;
+    audio.duration = 300;
+
+    // Begin HTML5 playback (no buffer yet)
+    t.play();
+    expect(t.machineState).toBe('html5');
+
+    // Simulate HTML5 advancing to 42s
+    audio.currentTime = 42;
+    audio.paused = false;
+    expect(audio.play).toHaveBeenCalled();
+
+    // Buffer decode completes mid-playback
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    sendBufferReady(t);
+
+    // Mid-stream crossover: now in webaudio state, source running, isPlaying preserved.
+    // (HTML5 is paused asynchronously via setTimeout after the crossfade completes
+    // — see _crossoverHtml5ToWebAudio. We don't await the timer here; the
+    // sample-accurate gain ramps are what matter for audio correctness.)
+    expect(t.machineState).toBe('webaudio');
+    expect(t.isPlaying).toBe(true);
+    expect(t.playbackType).toBe('WEBAUDIO');
+    expect(t.hasSourceNode).toBe(true);
+  });
+
+  it('crossover preserves playback position — no jump in currentTime', () => {
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const audio = t.audio as unknown as MockAudioElement;
+    audio.duration = 300;
+
+    t.play();
+    audio.currentTime = 123.456;
+    audio.paused = false;
+
+    // Before crossover: currentTime reads from HTML5
+    expect(t.currentTime).toBeCloseTo(123.456, 2);
+
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    sendBufferReady(t);
+
+    // After crossover: currentTime reads from WebAudio clock, same value
+    expect(t.currentTime).toBeCloseTo(123.456, 2);
+
+    // And it advances from there as ctx.currentTime advances
+    advanceTime(5);
+    expect(t.currentTime).toBeCloseTo(128.456, 2);
+  });
+
+  it('BUFFER_READY while paused crosses over but does not start source node', () => {
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const audio = t.audio as unknown as MockAudioElement;
+    audio.duration = 300;
+
+    // Start playing then pause at 60s
+    t.play();
+    audio.currentTime = 60;
+    t.pause();
+    expect(t.isPlaying).toBe(false);
+
+    // Buffer arrives while paused
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    sendBufferReady(t);
+
+    // Crossover happened: now in webaudio state, still paused, no source node
+    expect(t.machineState).toBe('webaudio');
+    expect(t.isPlaying).toBe(false);
+    expect(t.playbackType).toBe('WEBAUDIO');
+    expect(t.hasSourceNode).toBe(false);
+
+    // Resume: webaudio PLAY should start the source node from the paused offset
+    t.play();
+    expect(t.isPlaying).toBe(true);
+    expect(t.hasSourceNode).toBe(true);
+    expect(t.currentTime).toBeCloseTo(60, 1);
+  });
+
+  it('crossover clears notifiedLookahead so scheduling can re-run on WebAudio clock', () => {
+    // Scenario: the HTML5 progress loop already fired LOOKAHEAD_REACHED (and
+    // scheduling was deferred or used an imprecise HTML5 prediction) — after
+    // the crossover, the flag must be clear so the webaudio progress loop can
+    // re-trigger with accurate timing.
+    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const audio = t.audio as unknown as MockAudioElement;
+    audio.duration = 300;
+    t.play();
+
+    // Simulate the lookahead having already fired
+    (t as unknown as { _actor: { send: (e: { type: string }) => void } })._actor.send({
+      type: 'LOOKAHEAD_REACHED',
+    });
+    const preSnap = (t as unknown as { _actor: { getSnapshot: () => { context: { notifiedLookahead: boolean } } } })._actor.getSnapshot();
+    expect(preSnap.context.notifiedLookahead).toBe(true);
+
+    // Buffer arrives → crossover
+    t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
+    sendBufferReady(t);
+
+    const postSnap = (t as unknown as { _actor: { getSnapshot: () => { context: { notifiedLookahead: boolean } } } })._actor.getSnapshot();
+    expect(postSnap.context.notifiedLookahead).toBe(false);
+  });
+});
+
 describe('Track scheduleGaplessStart', () => {
   // Bug: scheduleGaplessStart was sending 'PLAY' instead of 'PLAY_WEBAUDIO',
   // putting the track machine into 'html5' state. This caused currentTime to

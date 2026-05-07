@@ -29,6 +29,17 @@ const GAPLESS_SCHEDULE_LOOKAHEAD = 5;
 /** How many seconds into HTML5 playback before we preload the next track. */
 const PRELOAD_DELAY = 15;
 
+/**
+ * Crossfade duration (seconds) for the mid-stream HTML5 → Web Audio handoff.
+ * Both sides of the crossfade run on AudioContext-clock gain ramps
+ * (the HTML5 side via a GainNode after MediaElementAudioSourceNode), so
+ * the join is sample-accurate. 30 ms is short enough to be inaudible as a
+ * fade and long enough to mask any sample-level discontinuity between the
+ * two streams.
+ */
+const CROSSOVER_FADE_SEC = 0.03;
+
+
 export class Track {
   readonly index: number;
   readonly metadata: TrackMetadata;
@@ -51,14 +62,63 @@ export class Track {
     if (context && !this.gainNode) {
       this.gainNode = context.createGain();
       this.gainNode.gain.value = this.audio.volume;
+      this.gainNode.connect(context.destination);
+
+      // Route the HTML5 element through the AudioContext via a
+      // MediaElementAudioSourceNode + dedicated GainNode. With this routing,
+      // the HTML5 side has its own AudioContext-clock gain we can ramp
+      // sample-accurately during crossover, eliminating the click that an
+      // abrupt audio.pause() leaves at the cut point. Volume control moves
+      // entirely onto gainNode (master); we set audio.volume = 1 so the
+      // browser-side and AudioContext-side gains don't multiply.
+      //
+      // createMediaElementSource severs the element's default audio output
+      // for the rest of its life, so once this runs, all HTML5 playback
+      // flows through the AudioContext. CORS: cross-origin audio without
+      // Access-Control-Allow-Origin will produce silence through the
+      // MediaElementAudioSourceNode path. If the call throws (rare; some
+      // legacy implementations or double-attach), fall back to the
+      // pre-routing behavior with audio.volume controlling HTML5 directly.
+      try {
+        this._mediaElementSource = context.createMediaElementSource(this.audio);
+        this._html5GainNode = context.createGain();
+        this._html5GainNode.gain.value = 1;
+        this._mediaElementSource.connect(this._html5GainNode);
+        this._html5GainNode.connect(this.gainNode);
+        this.audio.volume = 1;
+      } catch {
+        this._mediaElementSource = null;
+        this._html5GainNode = null;
+      }
     }
     return context;
   }
 
   private gainNode: GainNode | null = null;
+  private _mediaElementSource: MediaElementAudioSourceNode | null = null;
+  private _html5GainNode: GainNode | null = null;
   private sourceNode: AudioBufferSourceNode | null = null;
   audioBuffer: AudioBuffer | null = null;
   /** AudioContext.currentTime at the start of the current playback segment. */
+  /**
+   * Offset (in seconds) between the decoded buffer's "offset 0" and the music's
+   * "offset 0". Some MP3 files include ID3v2 metadata, encoder priming samples,
+   * or container padding at the start; HTML5 audio elements skip past these
+   * natively (audio.currentTime=0 means music start), but `decodeAudioData` in
+   * some browsers includes them in the decoded buffer (buffer offset 0 = file
+   * start, music actually starts at offset _bufferStartPaddingSec).
+   *
+   * Without this shift, calling source.start(when, audio.currentTime) plays
+   * `audio.currentTime` seconds AHEAD of what HTML5 was just outputting,
+   * sounding like a backward skip at crossover. We compute this once both
+   * the buffer and audio.duration are known, and apply it as
+   *     source.start(when, trackTime + _bufferStartPaddingSec)
+   * everywhere we read from the buffer. User-facing time (currentTime/duration
+   * getters) continues to be reported in music-time, not buffer-time.
+   */
+  private _bufferStartPaddingSec = 0;
+  private _bufferAlignmentMeasured = false;
+
   private _waRefCtxTime = 0;
   /** Track position (seconds) at the start of the current playback segment. */
   private _waRefTrackTime = 0;
@@ -132,8 +192,18 @@ export class Track {
             resolveUrl: fromPromise(async ({ signal }) => {
               const res = await fetch(this._trackUrl, { method: 'HEAD', signal });
               if (res.redirected && res.url) {
+                // Cache the resolved URL so the WebAudio GET below uses it
+                // directly (avoiding a second redirect round-trip). Do NOT
+                // overwrite this.audio.src — the HTML5 element may currently
+                // be streaming, and assigning a new src aborts playback,
+                // resets audio.currentTime to 0, and reloads from the new
+                // URL. The browser already handles the original URL's
+                // redirect transparently for HTML5; updating src here causes
+                // a perceived jump back to the start mid-playback (which the
+                // user then notices later as a "skip" at crossover, since
+                // audio.currentTime captured at crossover time reflects the
+                // post-reset position rather than the user's actual progress).
                 this._resolvedUrl = res.url;
-                this.audio.src = res.url;
                 return res.url;
               }
               return null;
@@ -149,7 +219,15 @@ export class Track {
               this._pendingArrayBuffer = null;
               if (!buf || !this.ctx) throw new Error('No ArrayBuffer or AudioContext');
               this.audioBuffer = await this.ctx.decodeAudioData(buf);
-              queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
+              this._maybeComputeBufferAlignment();
+              // NOTE: do NOT notify the queue from here. The fetchDecode child
+              // is about to sendParent('BUFFER_READY'), which the track machine
+              // handles by transitioning state (and, in html5, by performing
+              // the mid-stream crossover). If we notified the queue first, it
+              // would observe a stale playbackType ('HTML5') and incorrectly
+              // defer next-track preload via the HTML5 deferral guard. The
+              // notification is emitted from the BUFFER_READY transitions in
+              // track.machine, after the crossover/state update is in effect.
             }),
           },
         }),
@@ -163,21 +241,31 @@ export class Track {
         startSourceNode: () => {
           this._startSourceNode(this.pausedAtTrackTime);
         },
+        crossoverHtml5ToWebAudio: ({ context }: { context: TrackContext }) => {
+          this._crossoverHtml5ToWebAudio(context.isPlaying);
+        },
         startScheduledSourceNode: ({ context }: { context: TrackContext }) => {
           const when = context.scheduledStartContextTime;
           if (when === null || !this.ctx || !this.audioBuffer || !this.gainNode) return;
+          this._maybeComputeBufferAlignment();
           this._stopSourceNode();
           this.sourceNode = this.ctx.createBufferSource();
           this.sourceNode.buffer = this.audioBuffer;
           this.sourceNode.playbackRate.value = this.queueRef.playbackRate;
           this.sourceNode.connect(this.gainNode);
-          this.gainNode.connect(this.ctx.destination);
+          // gainNode → destination connected once at ctx setup; do not re-connect
+          // here or the gainNode's output is duplicated (Web Audio sums multiple
+          // edges between the same pair of nodes).
           this.sourceNode.onended = this._handleWebAudioEnded;
-          this.sourceNode.start(when, 0);
+          // Skip past any decoded-buffer start padding (ID3 tags, encoder
+          // priming) so the gapless transition begins at music-time 0, not at
+          // half a second of silence/garbage. _bufferStartPaddingSec is
+          // computed at decode time via _ensureBufferAlignment.
+          this.sourceNode.start(when, this._bufferStartPaddingSec);
           this._waRefCtxTime = when;
           this._waRefTrackTime = 0;
           this.queueRef.onDebug(
-            `startScheduledSourceNode track=${this.index} when=${when.toFixed(3)} ctxNow=${this.ctx.currentTime.toFixed(3)} delta=${(when - this.ctx.currentTime).toFixed(3)}s`
+            `startScheduledSourceNode track=${this.index} when=${when.toFixed(3)} ctxNow=${this.ctx.currentTime.toFixed(3)} delta=${(when - this.ctx.currentTime).toFixed(3)}s padding=${this._bufferStartPaddingSec.toFixed(3)}s`
           );
         },
         startProgressLoop: () => this.startProgressLoop(),
@@ -187,7 +275,6 @@ export class Track {
           this.pausedAtTrackTime = isFinite(t) ? t : 0;
         },
         stopSourceNode: () => this._stopSourceNode(),
-        disconnectGain: () => this._disconnectGain(),
         stopProgressLoop: () => this._stopProgressLoop(),
         reportProgress: () => {
           queueMicrotask(() => this.queueRef.onProgress(this.toInfo()));
@@ -204,6 +291,12 @@ export class Track {
         },
         notifyTrackEnded: () => {
           queueMicrotask(() => this.queueRef.onTrackEnded(this));
+        },
+        notifyBufferReady: () => {
+          // Emitted from BUFFER_READY transitions so the queue observes the
+          // post-transition state (e.g. WEBAUDIO after a crossover) rather
+          // than the pre-transition state.
+          queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
         },
       },
     });
@@ -235,7 +328,15 @@ export class Track {
 
   setVolume(v: number): void {
     const vol = Math.min(1, Math.max(0, v));
-    this.audio.volume = vol;
+    // When the HTML5 element is routed through MediaElementAudioSourceNode,
+    // master volume lives entirely on gainNode — keep audio.volume at 1 so the
+    // browser-side and AudioContext-side gains don't multiply (giving v²).
+    // Otherwise (HTML5_ONLY mode, or pre-ctx), audio.volume is the master.
+    if (this._mediaElementSource) {
+      this.audio.volume = 1;
+    } else {
+      this.audio.volume = vol;
+    }
     if (this.gainNode) this.gainNode.gain.value = vol;
     this._actor.send({ type: 'SET_VOLUME', volume: vol });
   }
@@ -435,8 +536,112 @@ export class Track {
   // Private: Web Audio helpers
   // --------------------------------------------------------------------------
 
-  private _startSourceNode(offset: number): void {
+  /**
+   * Mid-stream crossover: switch an actively-playing HTML5 track to Web Audio.
+   *
+   * Why this exists: we cannot reliably predict when an HTML5 <audio> element
+   * will fire 'ended' from within the AudioContext clock. Any prediction is
+   * at the mercy of the browser's audio pipeline (buffering stalls, codec
+   * padding differences, clock drift between audio.currentTime and
+   * ctx.currentTime over long sessions). Scheduling the next gapless track
+   * against that prediction is how overlap bugs happen.
+   *
+   * Instead, as soon as the buffer is decoded, we hand playback off to Web
+   * Audio while the track is still mid-song. From that point on, the track
+   * and all subsequent gapless transitions live on a single clock
+   * (AudioContext.currentTime), so scheduling is sample-accurate by
+   * construction — no prediction involved.
+   *
+   * Ordering: pause the HTML5 element FIRST, then start the source node at
+   * the captured offset. Pausing first ensures audio.currentTime is frozen
+   * before we read it as the Web Audio start offset, so there's no brief
+   * double-audio window at the crossover point.
+   */
+  private _crossoverHtml5ToWebAudio(wasPlaying: boolean): void {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
+
+    const offset = this.audio.currentTime;
+    this.pausedAtTrackTime = isFinite(offset) ? offset : 0;
+
+    if (!wasPlaying) {
+      this.audio.pause();
+      this.queueRef.onDebug(
+        `crossoverHtml5ToWebAudio track=${this.index} offset=${this.pausedAtTrackTime.toFixed(3)} wasPlaying=false`
+      );
+      return;
+    }
+
+    // Sample-accurate crossfade. Both sides live on the AudioContext clock:
+    //   • HTML5 path:    mediaElementSource → _html5GainNode → gainNode → destination
+    //   • WebAudio path: source → fadeGain → gainNode → destination
+    //
+    // We schedule a 1→0 ramp on _html5GainNode and a 0→1 ramp on the WebAudio
+    // fadeGain, both over CROSSOVER_FADE_SEC and both starting at the same
+    // ctx-clock time. The two streams overlap with constant-summed gain
+    // through the fade window, smoothing out the sample-level discontinuity
+    // that an instant cut would otherwise leave audible as a "blip".
+    //
+    // If _html5GainNode wasn't created (createMediaElementSource fell back —
+    // e.g. CORS blocked or legacy browser), we degrade to immediate pause +
+    // WebAudio fade-in only.
+    const t0 = this.ctx.currentTime;
+    const t1 = t0 + CROSSOVER_FADE_SEC;
+
+    if (this._html5GainNode) {
+      this._html5GainNode.gain.cancelScheduledValues(t0);
+      this._html5GainNode.gain.setValueAtTime(1, t0);
+      this._html5GainNode.gain.linearRampToValueAtTime(0, t1);
+      // Pause the HTML5 element after the fade completes — it stops consuming
+      // network/decoder resources and the gain is back to silent regardless.
+      // Reset the gain to 1 afterwards so future plays through this element
+      // (post-deactivate/reactivate) start at full level.
+      const ctxRef = this.ctx;
+      const html5GainRef = this._html5GainNode;
+      setTimeout(() => {
+        this.audio.pause();
+        if (ctxRef && html5GainRef) {
+          html5GainRef.gain.cancelScheduledValues(ctxRef.currentTime);
+          html5GainRef.gain.setValueAtTime(1, ctxRef.currentTime);
+        }
+      }, CROSSOVER_FADE_SEC * 1000 + 5);
+    } else {
+      // Fallback: no MediaElementSource path. Silence HTML5 immediately.
+      const savedVolume = this.audio.volume;
+      this.audio.volume = 0;
+      this.audio.pause();
+      this.audio.volume = savedVolume;
+    }
+
+    this._startSourceNode(this.pausedAtTrackTime, CROSSOVER_FADE_SEC);
+
+    this.queueRef.onDebug(
+      `crossoverHtml5ToWebAudio track=${this.index} offset=${this.pausedAtTrackTime.toFixed(3)} wasPlaying=true fade=${CROSSOVER_FADE_SEC}s mediaSource=${!!this._html5GainNode}`
+    );
+  }
+
+  /**
+   * Reverted: alignment-based fixes (duration-delta and buffer-silence
+   * scanning) reduced the perceived skip on archive.org files but did not
+   * eliminate it, suggesting the residual gap isn't a buffer/timeline
+   * alignment problem at all. Leaving _bufferStartPaddingSec at 0 (no shift)
+   * until we have a confirmed root cause; the field and call sites are kept
+   * so we can re-introduce a fix without churning the source-start code.
+   */
+  private _maybeComputeBufferAlignment(): void {
+    if (!this.audioBuffer) return;
+    if (this._bufferAlignmentMeasured) return;
+    this._bufferStartPaddingSec = 0;
+    this._bufferAlignmentMeasured = true;
+    this.queueRef.onDebug(
+      `_maybeComputeBufferAlignment track=${this.index} bufferDur=${this.audioBuffer.duration.toFixed(3)}s html5Dur=${isNaN(this.audio.duration) ? 'NaN' : this.audio.duration.toFixed(3) + 's'} (alignment shift disabled — see comment)`
+    );
+  }
+
+  private _startSourceNode(offset: number, fadeInSec = 0): void {
+    if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
+    // Re-check alignment in case audio.duration became available since the
+    // last computation (e.g., preloaded track whose metadata load completed).
+    this._maybeComputeBufferAlignment();
     this._stopSourceNode();
 
     // Ensure the AudioContext is running (it may have been suspended after
@@ -448,13 +653,31 @@ export class Track {
     this.sourceNode = this.ctx.createBufferSource();
     this.sourceNode.buffer = this.audioBuffer;
     this.sourceNode.playbackRate.value = this.queueRef.playbackRate;
-    this.sourceNode.connect(this.gainNode);
-    this.gainNode.connect(this.ctx.destination);
+
+    // When fadeInSec > 0 (crossover path), insert a per-source fade gain
+    // between the source and the master gainNode. This gain ramps 0 → 1 over
+    // fadeInSec so the new Web Audio output rises in step with the HTML5
+    // element's audio-pipeline tail decaying. The master gainNode (which
+    // represents user volume) is unaffected.
+    if (fadeInSec > 0) {
+      const fadeNode = this.ctx.createGain();
+      const t0 = this.ctx.currentTime;
+      fadeNode.gain.setValueAtTime(0, t0);
+      fadeNode.gain.linearRampToValueAtTime(1, t0 + fadeInSec);
+      this.sourceNode.connect(fadeNode);
+      fadeNode.connect(this.gainNode);
+    } else {
+      this.sourceNode.connect(this.gainNode);
+    }
+    // gainNode → destination connected once at ctx setup; do not re-connect.
     this.sourceNode.onended = this._handleWebAudioEnded;
 
     this._waRefCtxTime = this.ctx.currentTime;
     this._waRefTrackTime = offset;
-    this.sourceNode.start(0, offset);
+    // Buffer-internal offset = music-time offset + decoded-buffer start padding.
+    // See _bufferStartPaddingSec docs for why this is necessary on MP3 files
+    // with ID3v2 tags or encoder priming samples.
+    this.sourceNode.start(0, offset + this._bufferStartPaddingSec);
   }
 
   private _stopSourceNode(): void {
@@ -471,15 +694,6 @@ export class Track {
       /* already disconnected */
     }
     this.sourceNode = null;
-  }
-
-  private _disconnectGain(): void {
-    if (!this.gainNode || !this.ctx) return;
-    try {
-      this.gainNode.disconnect(this.ctx.destination);
-    } catch {
-      /* already disconnected */
-    }
   }
 
   private _seekWebAudio(): void {

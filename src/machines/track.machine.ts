@@ -3,24 +3,30 @@
 //
 // States:
 //   idle        Initial state. Audio nodes not yet initialised.
-//   html5       HTML5 Audio is playing. Web Audio fetch+decode may be in progress.
+//   html5       HTML5 Audio is playing. Web Audio fetch+decode is in progress.
 //   loading     Track is preloaded (not yet playing). Decode in progress.
 //   webaudio    AudioBufferSourceNode is the active output.
 //
-// Design invariant — "Web Audio always wins eventually":
-//   When a track's buffer finishes decoding (BUFFER_READY), webAudioLoadingState
-//   is set to 'LOADED' regardless of what state the machine is in (html5, loading,
-//   or idle). We intentionally do NOT switch mid-stream — the track stays in html5
-//   until the next play(). But every state handles BUFFER_READY, so the flag is
-//   never lost, and the next play() will see the buffer and use Web Audio.
+// Design invariant — "Web Audio always wins as soon as the buffer is ready":
+//   When a track's buffer finishes decoding (BUFFER_READY) while the track is
+//   playing via HTML5, we hand playback off to Web Audio mid-stream. The
+//   HTML5 element is paused, and an AudioBufferSourceNode is started at the
+//   exact offset the HTML5 element was at. From that instant on, the track
+//   (and every gapless transition that follows it) lives on one clock
+//   (AudioContext.currentTime).
 //
-//   All DEACTIVATE transitions land in idle (not loading), so a deactivated track
-//   with a loaded buffer is always in idle+LOADED — ready for Web Audio on re-play.
+//   This is fundamental to gapless correctness: we cannot predict when an
+//   HTML5 element will fire 'ended' from the AudioContext clock — the two
+//   run on independent clocks with independent jitter (buffering stalls,
+//   codec padding differences, long-session drift). Any gapless scheduling
+//   that crosses those clocks is a prediction, and predictions are how
+//   overlap bugs happen. By moving the current track to Web Audio as soon
+//   as we can, all future gapless transitions are WebAudio→WebAudio and
+//   sample-accurate by construction.
 //
-// Bug fixes in this rewrite:
-//   #2: BUFFER_READY in html5 stays in html5 (no longer auto-transitions to webaudio)
-//   #3: DEACTIVATE from webaudio → idle (was staying in webaudio)
-//   #4: Removed dead error state (webAudioLoadingState: 'ERROR' is sufficient)
+//   DEACTIVATE transitions from every playing state land in idle, so a
+//   deactivated track with a loaded buffer is always idle+LOADED — ready
+//   for Web Audio on re-play.
 // ---------------------------------------------------------------------------
 
 import { setup, assign, spawnChild } from 'xstate';
@@ -84,12 +90,13 @@ export function createTrackMachine(initialContext: TrackContext) {
     actions: {
       playHtml5: () => {},
       startSourceNode: () => {},
+      crossoverHtml5ToWebAudio: () => {},
+      notifyBufferReady: () => {},
       startScheduledSourceNode: () => {},
       startProgressLoop: () => {},
       pauseHtml5: () => {},
       freezePausedTime: () => {},
       stopSourceNode: () => {},
-      disconnectGain: () => {},
       stopProgressLoop: () => {},
       reportProgress: () => {},
       seekHtml5: () => {},
@@ -131,6 +138,12 @@ export function createTrackMachine(initialContext: TrackContext) {
       setPlayingWebAudioType: assign({
         isPlaying: () => true,
         playbackType: () => 'WEBAUDIO' as PlaybackType,
+      }),
+      setPlaybackTypeWebAudio: assign({
+        playbackType: () => 'WEBAUDIO' as PlaybackType,
+      }),
+      clearNotifiedLookahead: assign({
+        notifiedLookahead: () => false,
       }),
     },
   }).createMachine({
@@ -199,7 +212,13 @@ export function createTrackMachine(initialContext: TrackContext) {
             },
             {
               target: 'html5',
-              actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop'],
+              // triggerFetchForPendingPlay also kicks off fetch+decode for the
+              // CURRENT track, not just the next one. That way BUFFER_READY
+              // fires while we're in html5, and crossoverHtml5ToWebAudio can
+              // hand the active track over to Web Audio mid-stream. The
+              // canStartFetch guard inside START_FETCH makes this a no-op if
+              // a fetch is already in flight (e.g. PLAY from loading state).
+              actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop', 'triggerFetchForPendingPlay'],
             },
           ],
           PLAY_WEBAUDIO: {
@@ -225,10 +244,10 @@ export function createTrackMachine(initialContext: TrackContext) {
             {
               guard: ({ context }: { context: TrackContext }) => context.pendingPlay,
               target: 'webaudio',
-              actions: ['clearPendingPlay', 'setPlayingWebAudio', 'startSourceNode', 'startProgressLoop'],
+              actions: ['clearPendingPlay', 'setPlayingWebAudio', 'startSourceNode', 'startProgressLoop', 'notifyBufferReady'],
             },
             {
-              actions: 'setLoadedState',
+              actions: ['setLoadedState', 'notifyBufferReady'],
             },
           ],
           BUFFER_ERROR: {
@@ -258,10 +277,25 @@ export function createTrackMachine(initialContext: TrackContext) {
             target: 'webaudio',
             actions: 'setPlayingWebAudio',
           },
-          // Bug #2 fix: BUFFER_READY in html5 stays in html5, only updates loading state.
-          // The actual switchover to webaudio only happens via explicit PLAY_WEBAUDIO.
+          // Mid-stream crossover to Web Audio. Running `crossoverHtml5ToWebAudio`
+          // synchronously captures audio.currentTime, pauses the HTML5 element,
+          // and starts a Web Audio source node at that exact offset. After the
+          // transition completes we're in webaudio state with isPlaying preserved
+          // (true if the track was playing, false if paused), so a subsequent
+          // PLAY in webaudio state will resume from pausedAtTrackTime.
+          //
+          // clearNotifiedLookahead resets the gapless lookahead flag so the
+          // webaudio progress loop can re-trigger scheduling with the accurate
+          // shared-clock end time, replacing any stale HTML5-clock prediction.
           BUFFER_READY: {
-            actions: 'setLoadedState',
+            target: 'webaudio',
+            actions: [
+              'setLoadedState',
+              'crossoverHtml5ToWebAudio',
+              'setPlaybackTypeWebAudio',
+              'clearNotifiedLookahead',
+              'notifyBufferReady',
+            ],
           },
           BUFFER_ERROR: {
             actions: 'setErrorState',
@@ -311,11 +345,11 @@ export function createTrackMachine(initialContext: TrackContext) {
             {
               guard: ({ context }: { context: TrackContext }) => context.pendingPlay,
               target: 'webaudio',
-              actions: ['clearPendingPlay', 'setPlayingWebAudio', 'startSourceNode', 'startProgressLoop'],
+              actions: ['clearPendingPlay', 'setPlayingWebAudio', 'startSourceNode', 'startProgressLoop', 'notifyBufferReady'],
             },
             {
               target: 'idle',
-              actions: 'setLoadedState',
+              actions: ['setLoadedState', 'notifyBufferReady'],
             },
           ],
           BUFFER_ERROR: {
@@ -338,7 +372,13 @@ export function createTrackMachine(initialContext: TrackContext) {
             },
             {
               target: 'html5',
-              actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop'],
+              // triggerFetchForPendingPlay also kicks off fetch+decode for the
+              // CURRENT track, not just the next one. That way BUFFER_READY
+              // fires while we're in html5, and crossoverHtml5ToWebAudio can
+              // hand the active track over to Web Audio mid-stream. The
+              // canStartFetch guard inside START_FETCH makes this a no-op if
+              // a fetch is already in flight (e.g. PLAY from loading state).
+              actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop', 'triggerFetchForPendingPlay'],
             },
           ],
           PLAY_WEBAUDIO: {
@@ -384,7 +424,6 @@ export function createTrackMachine(initialContext: TrackContext) {
               'clearIsPlaying',
               'freezePausedTime',
               'stopSourceNode',
-              'disconnectGain',
               'stopProgressLoop',
               'reportProgress',
             ],
@@ -414,7 +453,6 @@ export function createTrackMachine(initialContext: TrackContext) {
             actions: [
               'clearPlayingAndSchedule',
               'stopSourceNode',
-              'disconnectGain',
               'stopProgressLoop',
               'resetTiming',
             ],
@@ -431,7 +469,6 @@ export function createTrackMachine(initialContext: TrackContext) {
             actions: [
               'clearPlayingAndSchedule',
               'stopSourceNode',
-              'disconnectGain',
               'stopProgressLoop',
               'resetTiming',
               'resetHtml5Element',
@@ -443,7 +480,6 @@ export function createTrackMachine(initialContext: TrackContext) {
             actions: [
               'clearPlayingAndSchedule',
               'stopSourceNode',
-              'disconnectGain',
               'resetTiming',
               'resetHtml5Element',
               'stopProgressLoop',

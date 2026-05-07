@@ -418,21 +418,57 @@ export class Queue implements TrackQueueRef {
 
   private _preloadAhead(fromIndex: number): void {
     const cur = this._trackAt(fromIndex);
-    if (cur && cur.playbackType === 'HTML5' && cur.isPlaying) {
-      const threshold = isNaN(cur.duration) ? 15 : Math.min(cur.duration * 0.2, 15);
-      if (cur.currentTime < threshold) {
-        this.onDebug(`_preloadAhead: deferring — HTML5 track ${fromIndex} at ${cur.currentTime.toFixed(1)}s (threshold=${threshold.toFixed(1)}s)`);
-        return;
-      }
+
+    // Bandwidth-contention gate: while the current track is playing via HTML5
+    // and its own Web Audio buffer is still being fetched+decoded, holding
+    // off on every next-track preload prevents two concurrent large MP3
+    // downloads from delaying the current track's crossover (and therefore
+    // the moment from which all future gapless transitions are
+    // sample-accurate). When the current track's BUFFER_READY fires,
+    // notifyBufferReady → TRACK_LOADED → preloadAhead re-runs, this gate
+    // is no longer engaged, and next-track fetches proceed sequentially
+    // as buffers complete.
+    //
+    // This lives here (not in the queue machine) because preloadAhead is
+    // invoked as a transition action from ~7 different events, and the
+    // gate's data source — the current track's machine state — isn't
+    // owned by the queue machine. Pushing the check into every caller
+    // would just duplicate the same read.
+    if (
+      cur != null &&
+      cur.isPlaying &&
+      cur.playbackType === 'HTML5' &&
+      cur.webAudioLoadingState === 'LOADING'
+    ) {
+      this.onDebug(`_preloadAhead(${fromIndex}): deferring all — current track buffer still loading`);
+      return;
     }
+
+    // Speculative-load throttle: the immediate next track is always allowed
+    // (it must be ready for gapless scheduling), but tracks beyond that are
+    // deferred until the current track has played past min(duration*0.2, 15s)
+    // — the point at which we have evidence the user is committing to
+    // listening, not skipping.
+    const curBelowThreshold =
+      cur != null &&
+      cur.isPlaying &&
+      (() => {
+        const threshold = isNaN(cur.duration) ? 15 : Math.min(cur.duration * 0.2, 15);
+        return cur.currentTime < threshold;
+      })();
+
     const limit = fromIndex + this._preloadNumTracks + 1;
-    this.onDebug(`_preloadAhead(${fromIndex}) limit=${limit} trackCount=${this._tracks.length}`);
+    this.onDebug(`_preloadAhead(${fromIndex}) limit=${limit} trackCount=${this._tracks.length} belowThreshold=${curBelowThreshold}`);
     for (let i = fromIndex + 1; i < this._tracks.length && i < limit; i++) {
       const t = this._tracks[i];
+      if (i > fromIndex + 1 && curBelowThreshold) {
+        this.onDebug(`_preloadAhead: deferring track ${i} (current at ${cur!.currentTime.toFixed(1)}s, below threshold)`);
+        return;
+      }
       if (!t.isBufferLoaded) {
         this.onDebug(`_preloadAhead: starting preload for track ${i}`);
         t.preload();
-        break;
+        return;
       } else {
         this.onDebug(`_preloadAhead: track ${i} already loaded`);
       }
