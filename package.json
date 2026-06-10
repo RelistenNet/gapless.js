@@ -1,6 +1,6 @@
 {
   "name": "gapless",
-  "version": "4.2.2",
+  "version": "4.2.3",
   "description": "Gapless audio playback javascript plugin",
   "type": "module",
   "main": "dist/index.mjs",
@@ -37,18 +37,18 @@
   "author": "Daniel Saewitz",
   "license": "MIT",
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
-    "@switz/eslint-config": "^13.0.2",
-    "@vitest/coverage-v8": "^4.1.5",
-    "eslint": "^10.3.0",
-    "happy-dom": "^20.9.0",
-    "playwright": "^1.59.1",
+    "@playwright/test": "^1.60.0",
+    "@switz/eslint-config": "^13.1.0",
+    "@vitest/coverage-v8": "^4.1.8",
+    "eslint": "^10.4.1",
+    "happy-dom": "^20.10.2",
+    "playwright": "^1.60.0",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.8"
   },
   "packageManager": "pnpm@10.30.2",
   "dependencies": {
-    "xstate": "^5.31.0"
+    "xstate": "^5.32.0"
   }
 }
