@@ -419,10 +419,17 @@ export function createTrackMachine(initialContext: TrackContext) {
       // -----------------------------------------------------------------
       webaudio: {
         on: {
+          // clearScheduledStart: once the source node is stopped, the
+          // scheduled start time no longer describes anything real — resume
+          // re-anchors the source at a later context time, so any end-time
+          // math based on scheduledStartContextTime + duration would land
+          // mid-track (scheduling the next track to start while this one is
+          // still audible).
           PAUSE: {
             actions: [
               'clearIsPlaying',
               'freezePausedTime',
+              'clearScheduledStart',
               'stopSourceNode',
               'stopProgressLoop',
               'reportProgress',

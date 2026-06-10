@@ -398,5 +398,31 @@ describe('playbackRate', () => {
       // scheduledStartContextTime=5, duration=100, rate=2 → 5 + 100/2 = 55
       expect(endTime).toBeCloseTo(55, 1);
     });
+
+    it('pause/resume of a gapless-started track: end time follows the resumed anchor, not the stale scheduled start', () => {
+      // Regression: a track started via scheduleGaplessStart kept its
+      // scheduledStartContextTime after pause/resume, so the next track was
+      // scheduled at scheduledStart + duration — a time that falls mid-track
+      // once the pause shifted real playback later. Both tracks then played
+      // simultaneously from that point.
+      const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+      injectBuffer(q, 0, 100);
+      injectBuffer(q, 1);
+      const tracks = (q as unknown as { _tracks: Track[] })._tracks;
+
+      advanceTime(5);
+      tracks[0].scheduleGaplessStart(5); // gapless start at ctx=5, dur=100
+      advanceTime(25);                   // position 25 @ ctx 30
+      tracks[0].pause();
+      advanceTime(40);                   // paused for 40s → ctx 70
+      tracks[0].play();                  // resume from 25 @ ctx 70
+
+      const computeEndTime = (q as unknown as { _computeTrackEndTime: (t: Track) => number | null })._computeTrackEndTime;
+      const endTime = computeEndTime.call(q, tracks[0]);
+      // Correct: 70 + (100 - 25) = 145. The stale scheduled-start math gave
+      // 5 + 100 = 105 — i.e. the next track started 40s (the pause duration)
+      // before this one actually ends.
+      expect(endTime).toBeCloseTo(145, 1);
+    });
   });
 });

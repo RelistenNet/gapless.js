@@ -602,6 +602,69 @@ describe('Queue pause after gapless transition reports correct state', () => {
   });
 });
 
+describe('Queue pause/resume after gapless transition', () => {
+  // Regression: two tracks audible simultaneously after pause/resume.
+  //
+  // Real-world sequence (Relisten, GD 6/3/76): track 9 (Scarlet Begonias)
+  // started via gapless scheduling at ctx=413.84. The user paused and
+  // resumed; on resume, _computeTrackEndTime still used track 9's stale
+  // scheduledStartContextTime (413.84 + 707.04 = 1120.88) instead of the
+  // re-anchored playback position, so track 10 (Dancin' in the Street) was
+  // scheduled to start at 1120.88 — a moment that, after the pause shifted
+  // playback later, fell mid-way through track 9. Both played at once.
+
+  type InternalTrack = {
+    audio: MockAudioElement;
+    audioBuffer: AudioBuffer | null;
+    scheduleGaplessStart: (when: number) => void;
+    scheduledStartContextTime: number | null;
+    currentTime: number;
+  };
+  type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
+
+  it('reschedules the next track from the resumed position, not the stale scheduled start', async () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
+    injectBuffer(q, 1, 200);
+    injectBuffer(q, 2, 150);
+    q.play(); // track 0 plays via HTML5
+
+    const internal = q as unknown as InternalQueue;
+    // Track 1 gapless-scheduled to start at ctx=0
+    internal._tracks[1].scheduleGaplessStart(0);
+    internal._scheduledNextIndex = 1;
+
+    // Track 0 ends → gapless takeover, track 1 becomes current
+    internal._tracks[0].audio.simulateEnded();
+    await Promise.resolve();
+    expect(q.currentTrackIndex).toBe(1);
+
+    advanceTime(50); // track 1 at position 50 (ctx 50)
+    q.pause();
+    advanceTime(30); // paused for 30s (ctx 80)
+    q.play();        // resume from 50 at ctx 80; PLAY action re-runs scheduleGapless
+
+    // Track 2 must be scheduled at the resumed end time: 80 + (200 - 50) = 230.
+    // The stale scheduled-start math gave 0 + 200 = 200 — 30s before track 1
+    // actually ends, so tracks 1 and 2 would overlap for 30 seconds.
+    expect(internal._scheduledNextIndex).toBe(2);
+    const when = internal._tracks[2].scheduledStartContextTime;
+    expect(when).not.toBeNull();
+    expect(when!).toBeCloseTo(230, 1);
+  });
+
+  it('pause clears the scheduled start time on a gapless-started track', () => {
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+    injectBuffer(q, 1, 200);
+    const internal = q as unknown as InternalQueue;
+    internal._tracks[1].scheduleGaplessStart(0);
+    expect(internal._tracks[1].scheduledStartContextTime).toBe(0);
+
+    advanceTime(10);
+    (internal._tracks[1] as unknown as { pause: () => void }).pause();
+    expect(internal._tracks[1].scheduledStartContextTime).toBeNull();
+  });
+});
+
 describe('Queue seek cancels stale gapless schedule', () => {
   type InternalTrack = {
     audioBuffer: AudioBuffer | null;

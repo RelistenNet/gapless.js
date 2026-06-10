@@ -483,6 +483,29 @@ export class Track {
     return this._actor.getSnapshot().context.scheduledStartContextTime;
   }
 
+  /**
+   * Context-clock time at which the currently playing Web Audio source will
+   * reach the end of its buffer, derived from the live playback anchor
+   * (_waRefCtxTime/_waRefTrackTime). The anchor is re-established every time
+   * a source node starts (scheduled gapless start, resume, seek, crossover),
+   * so this stays correct across interruptions — unlike
+   * scheduledStartContextTime + duration, which goes stale the moment a
+   * pause/resume re-anchors the source at a later context time. For an
+   * uninterrupted gapless chain it is exact (the anchor IS the scheduled
+   * start), so next-track scheduling stays sample-accurate.
+   *
+   * Null when no source node is active (idle/html5/loading, or paused).
+   */
+  get playbackEndContextTime(): number | null {
+    const snap = this._actor.getSnapshot();
+    if (snap.value !== 'webaudio' || !snap.context.isPlaying) return null;
+    if (!this.sourceNode || !this.audioBuffer) return null;
+    const rate = this.sourceNode.playbackRate.value || 1;
+    const bufferRemaining =
+      this.audioBuffer.duration - this._bufferStartPaddingSec - this._waRefTrackTime;
+    return this._waRefCtxTime + bufferRemaining / rate;
+  }
+
   get isBufferLoaded(): boolean {
     return this.audioBuffer !== null;
   }

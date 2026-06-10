@@ -526,13 +526,20 @@ export class Queue implements TrackQueueRef {
   private _computeTrackEndTime(track: Track): number | null {
     const ctx = getAudioContext();
     if (!ctx || !track.isBufferLoaded) return null;
-    const duration = track.duration;
-    if (isNaN(duration)) return null;
 
-    if (track.scheduledStartContextTime !== null) {
-      return track.scheduledStartContextTime + duration / this._playbackRate;
+    // Web Audio playback: derive the end time from the source node's live
+    // playback anchor. For an uninterrupted gapless chain this equals
+    // scheduledStart + duration exactly, but unlike that formula it remains
+    // correct after a pause/resume re-anchors the source at a later context
+    // time. (Using the stale scheduled start here is how the next track got
+    // scheduled mid-track, with both tracks audible simultaneously.)
+    const anchoredEnd = track.playbackEndContextTime;
+    if (anchoredEnd !== null) {
+      return anchoredEnd > ctx.currentTime ? anchoredEnd : null;
     }
 
+    const duration = track.duration;
+    if (isNaN(duration)) return null;
     const remaining = (duration - track.currentTime) / this._playbackRate;
     if (remaining <= 0) return null;
     return ctx.currentTime + remaining;
