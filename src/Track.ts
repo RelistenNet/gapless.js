@@ -294,11 +294,6 @@ export class Track {
         seekWebAudio: () => this._seekWebAudio(),
         resetHtml5Element: () => {
           this.audio.currentTime = 0;
-          this.audio.muted = false;
-          if (this._html5GainNode && this.ctx) {
-            this._html5GainNode.gain.cancelScheduledValues(this.ctx.currentTime);
-            this._html5GainNode.gain.setValueAtTime(1, this.ctx.currentTime);
-          }
         },
         resetTiming: () => {
           this._waRefCtxTime = 0;
@@ -630,17 +625,25 @@ export class Track {
       this._html5GainNode.gain.cancelScheduledValues(t0);
       this._html5GainNode.gain.setValueAtTime(1, t0);
       this._html5GainNode.gain.linearRampToValueAtTime(0, t1);
-      // Keep the HTML5 element playing (silently) after the fade completes.
-      // Pausing it severs the browser's media-element anchor, causing
-      // macOS/ChromeOS media keys to stop dispatching MediaSession events
-      // (the MediaSession API requires an actively-playing <audio>/<video>).
-      // The gain is already 0 so no sound leaks; the element just provides
-      // the "active media" signal the OS needs.
+      // Pause the HTML5 element after the fade completes — it stops consuming
+      // network/decoder resources and the gain is back to silent regardless.
+      // Reset the gain to 1 afterwards so future plays through this element
+      // (post-deactivate/reactivate) start at full level.
+      const ctxRef = this.ctx;
+      const html5GainRef = this._html5GainNode;
+      setTimeout(() => {
+        this.audio.pause();
+        if (ctxRef && html5GainRef) {
+          html5GainRef.gain.cancelScheduledValues(ctxRef.currentTime);
+          html5GainRef.gain.setValueAtTime(1, ctxRef.currentTime);
+        }
+      }, CROSSOVER_FADE_SEC * 1000 + 5);
     } else {
-      // Fallback: no MediaElementSource path. Mute the element but keep it
-      // playing so the browser still sees an active media element for media
-      // key routing.
-      this.audio.muted = true;
+      // Fallback: no MediaElementSource path. Silence HTML5 immediately.
+      const savedVolume = this.audio.volume;
+      this.audio.volume = 0;
+      this.audio.pause();
+      this.audio.volume = savedVolume;
     }
 
     this._startSourceNode(this.pausedAtTrackTime, CROSSOVER_FADE_SEC);

@@ -18,6 +18,13 @@ import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata, Playbac
 
 const MAX_SCHEDULE_LOOKAHEAD = 5;
 
+// Minimal silent WAV: 44-byte header + 2 bytes of silence (1 sample, mono, 16-bit, 44100 Hz).
+// Looped on a hidden <audio> element to keep the browser's media session anchor alive
+// after the real track crosses over to Web Audio (Chrome/Safari stop routing media
+// keys once every <audio>/<video> element is paused).
+const SILENT_WAV_DATA_URI =
+  'data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQIAAAAAAA==';
+
 export class Queue implements TrackQueueRef {
   private _tracks: Track[] = [];
   private readonly _actor;
@@ -36,6 +43,9 @@ export class Queue implements TrackQueueRef {
   private _volume: number;
   private _preloadNumTracks: number;
   private _playbackRate: number;
+
+  /** Silent looping element that keeps the browser's MediaSession anchor alive. */
+  private _mediaSessionAnchor: HTMLAudioElement | null = null;
 
   /** Index of the next track with a pre-scheduled gapless start, or null. */
   private _scheduledNextIndex: number | null = null;
@@ -177,7 +187,13 @@ export class Queue implements TrackQueueRef {
     this._actor = createActor(machine);
 
     this._actor.subscribe((snapshot) => {
-      updateMediaSessionPlaybackState(snapshot.value === 'playing');
+      const playing = snapshot.value === 'playing';
+      updateMediaSessionPlaybackState(playing);
+      if (playing) {
+        this._startMediaSessionAnchor();
+      } else {
+        this._stopMediaSessionAnchor();
+      }
     });
 
     this._actor.start();
@@ -297,6 +313,8 @@ export class Queue implements TrackQueueRef {
   }
 
   destroy(): void {
+    this._stopMediaSessionAnchor();
+    this._mediaSessionAnchor = null;
     for (const track of this._tracks) track.destroy();
     this._tracks = [];
     this._actor.stop();
@@ -543,5 +561,23 @@ export class Queue implements TrackQueueRef {
     const remaining = (duration - track.currentTime) / this._playbackRate;
     if (remaining <= 0) return null;
     return ctx.currentTime + remaining;
+  }
+
+  private _startMediaSessionAnchor(): void {
+    if (typeof Audio === 'undefined') return;
+    if (!this._mediaSessionAnchor) {
+      this._mediaSessionAnchor = new Audio(SILENT_WAV_DATA_URI);
+      this._mediaSessionAnchor.loop = true;
+      this._mediaSessionAnchor.volume = 0;
+    }
+    if (this._mediaSessionAnchor.paused) {
+      this._mediaSessionAnchor.play().catch(() => {});
+    }
+  }
+
+  private _stopMediaSessionAnchor(): void {
+    if (this._mediaSessionAnchor && !this._mediaSessionAnchor.paused) {
+      this._mediaSessionAnchor.pause();
+    }
   }
 }
