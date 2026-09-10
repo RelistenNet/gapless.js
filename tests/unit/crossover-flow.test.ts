@@ -3,20 +3,21 @@ import { Queue } from '../../src/Queue';
 import { mockFetchSuccess, mockFetchRedirect, MockAudioElement, MockAudioBuffer, advanceTime, MockGainNode } from '../setup';
 
 describe('crossover end-to-end flow', () => {
-  it('after q.play() + decode, current track crosses over and HTML5 element is paused', async () => {
+  it('after q.play() + decode, current track crosses over and HTML5 element stays playing (silently) for media key support', async () => {
     mockFetchSuccess();
     const debug: string[] = [];
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onDebug: (m: string) => debug.push(m) });
     q.play();
     for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
-    // The HTML5 element is paused after the crossfade completes (~30 ms).
     await new Promise(r => setTimeout(r, 50));
 
     const tracks = (q as any)._tracks;
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
     expect(tracks[0].machineState).toBe('webaudio');
     expect(tracks[0].isPlaying).toBe(true);
-    expect((tracks[0].audio as MockAudioElement).paused).toBe(true);
+    // HTML5 element stays playing (gain at 0) so the browser keeps routing
+    // media keys to the MediaSession handlers.
+    expect((tracks[0].audio as MockAudioElement).paused).toBe(false);
 
     expect(debug.some(m => m.includes('crossoverHtml5ToWebAudio'))).toBe(true);
   });
@@ -106,7 +107,8 @@ describe('crossover end-to-end flow', () => {
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
 
     const audio = tracks[0].audio as MockAudioElement;
-    expect(audio.paused).toBe(true);
+    // HTML5 element stays playing (silently) for media key support.
+    expect(audio.paused).toBe(false);
 
     // Two GainNodes should have ramped — the html5GainNode (1→0) and the
     // WebAudio fade gain (0→1). Inspect createGain call results.

@@ -467,6 +467,7 @@ export function createTrackMachine(initialContext: TrackContext) {
           LOOKAHEAD_REACHED: {
             actions: 'setNotifiedLookahead',
           },
+          HTML5_ENDED: {},
           WEBAUDIO_ENDED: {
             target: 'idle',
             actions: ['clearIsPlaying', 'stopProgressLoop', 'notifyTrackEnded'],
