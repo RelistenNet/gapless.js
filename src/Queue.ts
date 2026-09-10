@@ -18,6 +18,43 @@ import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata, Playbac
 
 const MAX_SCHEDULE_LOOKAHEAD = 5;
 
+/**
+ * Lazy singleton Blob URL for a 10-second silent WAV.
+ * Chrome requires a media element with >= 5 s intrinsic duration to treat it
+ * as a "controllable" media session. Generated once at first use; 8 kHz mono
+ * 8-bit keeps it ~80 KB.
+ */
+let _silentWavUrl: string | null = null;
+function getSilentWavUrl(): string {
+  if (_silentWavUrl) return _silentWavUrl;
+  const sampleRate = 8000;
+  const numSamples = sampleRate * 10;
+  const fileSize = 44 + numSamples;
+  const buffer = new ArrayBuffer(fileSize);
+  const view = new DataView(buffer);
+
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, fileSize - 8, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);       // fmt chunk size
+  view.setUint16(20, 1, true);        // PCM
+  view.setUint16(22, 1, true);        // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate, true); // byte rate
+  view.setUint16(32, 1, true);        // block align
+  view.setUint16(34, 8, true);        // 8 bits per sample
+  writeStr(36, 'data');
+  view.setUint32(40, numSamples, true);
+  new Uint8Array(buffer, 44).fill(128); // 8-bit PCM silence = 128
+
+  _silentWavUrl = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+  return _silentWavUrl;
+}
+
 export class Queue implements TrackQueueRef {
   private _tracks: Track[] = [];
   private readonly _actor;
@@ -36,6 +73,9 @@ export class Queue implements TrackQueueRef {
   private _volume: number;
   private _preloadNumTracks: number;
   private _playbackRate: number;
+
+  /** Silent looping element that keeps the browser's MediaSession anchor alive. */
+  private _mediaSessionAnchor: HTMLAudioElement | null = null;
 
   /** Index of the next track with a pre-scheduled gapless start, or null. */
   private _scheduledNextIndex: number | null = null;
@@ -177,7 +217,13 @@ export class Queue implements TrackQueueRef {
     this._actor = createActor(machine);
 
     this._actor.subscribe((snapshot) => {
-      updateMediaSessionPlaybackState(snapshot.value === 'playing');
+      const playing = snapshot.value === 'playing';
+      updateMediaSessionPlaybackState(playing);
+      if (playing) {
+        this._startMediaSessionAnchor();
+      } else {
+        this._stopMediaSessionAnchor();
+      }
     });
 
     this._actor.start();
@@ -297,6 +343,8 @@ export class Queue implements TrackQueueRef {
   }
 
   destroy(): void {
+    this._stopMediaSessionAnchor();
+    this._mediaSessionAnchor = null;
     for (const track of this._tracks) track.destroy();
     this._tracks = [];
     this._actor.stop();
@@ -543,5 +591,23 @@ export class Queue implements TrackQueueRef {
     const remaining = (duration - track.currentTime) / this._playbackRate;
     if (remaining <= 0) return null;
     return ctx.currentTime + remaining;
+  }
+
+  private _startMediaSessionAnchor(): void {
+    if (typeof Audio === 'undefined') return;
+    if (!this._mediaSessionAnchor) {
+      this._mediaSessionAnchor = new Audio(getSilentWavUrl());
+      this._mediaSessionAnchor.loop = true;
+      this._mediaSessionAnchor.volume = 0;
+    }
+    if (this._mediaSessionAnchor.paused) {
+      this._mediaSessionAnchor.play().catch(() => {});
+    }
+  }
+
+  private _stopMediaSessionAnchor(): void {
+    if (this._mediaSessionAnchor && !this._mediaSessionAnchor.paused) {
+      this._mediaSessionAnchor.pause();
+    }
   }
 }
