@@ -18,12 +18,40 @@ import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata, Playbac
 
 const MAX_SCHEDULE_LOOKAHEAD = 5;
 
-// Minimal silent WAV: 44-byte header + 2 bytes of silence (1 sample, mono, 16-bit, 44100 Hz).
-// Looped on a hidden <audio> element to keep the browser's media session anchor alive
-// after the real track crosses over to Web Audio (Chrome/Safari stop routing media
-// keys once every <audio>/<video> element is paused).
-const SILENT_WAV_DATA_URI =
-  'data:audio/wav;base64,UklGRiYAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQIAAAAAAA==';
+/**
+ * Build a Blob URL for a silent WAV of the given duration.
+ * Chrome requires a media element with >= 5 s intrinsic duration to treat it
+ * as a "controllable" media session, so the default is 10 s. Generated at
+ * runtime to avoid a large base64 literal; 8 kHz mono 8-bit keeps it ~80 KB.
+ */
+function createSilentWavUrl(durationSec = 10): string {
+  const sampleRate = 8000;
+  const numSamples = sampleRate * durationSec;
+  const fileSize = 44 + numSamples;
+  const buffer = new ArrayBuffer(fileSize);
+  const view = new DataView(buffer);
+
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, fileSize - 8, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);       // fmt chunk size
+  view.setUint16(20, 1, true);        // PCM
+  view.setUint16(22, 1, true);        // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate, true); // byte rate
+  view.setUint16(32, 1, true);        // block align
+  view.setUint16(34, 8, true);        // 8 bits per sample
+  writeStr(36, 'data');
+  view.setUint32(40, numSamples, true);
+  // 8-bit PCM silence is 128 (midpoint), not 0
+  new Uint8Array(buffer, 44).fill(128);
+
+  return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+}
 
 export class Queue implements TrackQueueRef {
   private _tracks: Track[] = [];
@@ -566,7 +594,7 @@ export class Queue implements TrackQueueRef {
   private _startMediaSessionAnchor(): void {
     if (typeof Audio === 'undefined') return;
     if (!this._mediaSessionAnchor) {
-      this._mediaSessionAnchor = new Audio(SILENT_WAV_DATA_URI);
+      this._mediaSessionAnchor = new Audio(createSilentWavUrl());
       this._mediaSessionAnchor.loop = true;
       this._mediaSessionAnchor.volume = 0;
     }
