@@ -19,14 +19,16 @@ import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata, Playbac
 const MAX_SCHEDULE_LOOKAHEAD = 5;
 
 /**
- * Build a Blob URL for a silent WAV of the given duration.
+ * Lazy singleton Blob URL for a 10-second silent WAV.
  * Chrome requires a media element with >= 5 s intrinsic duration to treat it
- * as a "controllable" media session, so the default is 10 s. Generated at
- * runtime to avoid a large base64 literal; 8 kHz mono 8-bit keeps it ~80 KB.
+ * as a "controllable" media session. Generated once at first use; 8 kHz mono
+ * 8-bit keeps it ~80 KB.
  */
-function createSilentWavUrl(durationSec = 10): string {
+let _silentWavUrl: string | null = null;
+function getSilentWavUrl(): string {
+  if (_silentWavUrl) return _silentWavUrl;
   const sampleRate = 8000;
-  const numSamples = sampleRate * durationSec;
+  const numSamples = sampleRate * 10;
   const fileSize = 44 + numSamples;
   const buffer = new ArrayBuffer(fileSize);
   const view = new DataView(buffer);
@@ -47,10 +49,10 @@ function createSilentWavUrl(durationSec = 10): string {
   view.setUint16(34, 8, true);        // 8 bits per sample
   writeStr(36, 'data');
   view.setUint32(40, numSamples, true);
-  // 8-bit PCM silence is 128 (midpoint), not 0
-  new Uint8Array(buffer, 44).fill(128);
+  new Uint8Array(buffer, 44).fill(128); // 8-bit PCM silence = 128
 
-  return URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+  _silentWavUrl = URL.createObjectURL(new Blob([buffer], { type: 'audio/wav' }));
+  return _silentWavUrl;
 }
 
 export class Queue implements TrackQueueRef {
@@ -594,7 +596,7 @@ export class Queue implements TrackQueueRef {
   private _startMediaSessionAnchor(): void {
     if (typeof Audio === 'undefined') return;
     if (!this._mediaSessionAnchor) {
-      this._mediaSessionAnchor = new Audio(createSilentWavUrl());
+      this._mediaSessionAnchor = new Audio(getSilentWavUrl());
       this._mediaSessionAnchor.loop = true;
       this._mediaSessionAnchor.volume = 0;
     }
