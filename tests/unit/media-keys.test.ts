@@ -13,7 +13,7 @@ describe('media key support via silent anchor element', () => {
     expect(anchor).toBeDefined();
     expect(anchor.paused).toBe(false);
     expect(anchor.loop).toBe(true);
-    expect(anchor.volume).toBe(0);
+    expect(anchor.volume).toBe(1);
   });
 
   it('pauses the anchor element when playback pauses', async () => {

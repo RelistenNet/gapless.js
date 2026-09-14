@@ -598,7 +598,8 @@ export class Queue implements TrackQueueRef {
     if (!this._mediaSessionAnchor) {
       this._mediaSessionAnchor = new Audio(getSilentWavUrl());
       this._mediaSessionAnchor.loop = true;
-      this._mediaSessionAnchor.volume = 0;
+      // Volume stays at default (1) — Chrome/Safari may ignore a zero-volume
+      // element for media focus. The WAV content is already silence.
     }
     if (this._mediaSessionAnchor.paused) {
       this._mediaSessionAnchor.play().catch(() => {});
