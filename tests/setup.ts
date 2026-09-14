@@ -137,6 +137,8 @@ export class MockAudioElement {
   duration = NaN;
   paused = true;
   readyState = 0;
+  loop = false;
+  muted = false;
 
   ended = false;
 
