@@ -271,8 +271,7 @@ export class Queue implements TrackQueueRef {
   previous(): void {
     const ct = this._currentTrack;
     if (ct && ct.currentTime > 8) {
-      ct.seek(0);
-      ct.play();
+      this._actor.send({ type: 'SEEK', time: 0 });
       return;
     }
 

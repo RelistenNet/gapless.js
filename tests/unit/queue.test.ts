@@ -410,8 +410,10 @@ describe('Queue onTrackEnded resets finished track', () => {
     q.play();
 
     const internal = q as unknown as InternalQueue;
-    // Track 0 ends via HTML5 (the onended handler)
-    audioOf(q, 0).simulateEnded();
+    // Track 0 is in webaudio state — end it via the source node's onended,
+    // not the HTML5 element's (HTML5_ENDED is not handled in webaudio state).
+    const sourceNode = internal._tracks[0].sourceNode as { simulateEnded(): void };
+    sourceNode.simulateEnded();
     await Promise.resolve();
 
     expect(internal._tracks[0]._waRefCtxTime).toBe(0);
