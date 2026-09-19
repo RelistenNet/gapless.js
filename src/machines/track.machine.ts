@@ -178,7 +178,7 @@ export function createTrackMachine(initialContext: TrackContext) {
       idle: {
         on: {
           SEEK: {
-            actions: ['seekHtml5'],
+            actions: ['seekHtml5', 'reportProgress'],
           },
           HTML5_ENDED: {
             actions: ['notifyTrackEnded'],
@@ -344,7 +344,7 @@ export function createTrackMachine(initialContext: TrackContext) {
       loading: {
         on: {
           SEEK: {
-            actions: ['seekHtml5'],
+            actions: ['seekHtml5', 'reportProgress'],
           },
           BUFFER_LOADING: {
             actions: 'setLoadingState',
