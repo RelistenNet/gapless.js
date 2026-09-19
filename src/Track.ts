@@ -124,6 +124,8 @@ export class Track {
   private _waRefTrackTime = 0;
   /** Temp storage for crossover offset — read by syncSeekTargetFromCrossover. */
   private _crossoverComputedOffset = 0;
+  /** Aborted on reset to remove pending loadedmetadata listeners. */
+  private _seekAbort = new AbortController();
   // ---- FSM -----------------------------------------------------------------
   private readonly _actor;
 
@@ -289,6 +291,8 @@ export class Track {
         seekHtml5: ({ context }: { context: TrackContext }) => this._seekHtml5(context.seekTarget),
         seekWebAudio: ({ context }: { context: TrackContext }) => this._seekWebAudio(context.seekTarget),
         resetHtml5Element: () => {
+          this._seekAbort.abort();
+          this._seekAbort = new AbortController();
           this.audio.currentTime = 0;
         },
         resetTiming: () => {
@@ -543,7 +547,7 @@ export class Track {
         const target = seekTarget;
         this.audio.addEventListener('loadedmetadata', () => {
           this.audio.currentTime = target;
-        }, { once: true });
+        }, { once: true, signal: this._seekAbort.signal });
       }
     }
     const promise = this.audio.play();
@@ -571,7 +575,7 @@ export class Track {
         () => {
           this.audio.currentTime = target;
         },
-        { once: true }
+        { once: true, signal: this._seekAbort.signal }
       );
       this.audio.load();
     }
