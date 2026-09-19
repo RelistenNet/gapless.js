@@ -198,8 +198,9 @@ export class Queue implements TrackQueueRef {
           const e = event as { type: 'SEEK'; time: number };
           this._trackAt(context.currentTrackIndex)?.seek(e.time);
         },
-        seekCurrentToZero: ({ context }) => {
-          this._trackAt(context.currentTrackIndex)?.seek(0);
+        seekCurrentToStartTime: ({ context, event }) => {
+          const e = event as { type: 'GOTO'; startTime?: number };
+          this._trackAt(context.currentTrackIndex)?.seek(e.startTime ?? 0);
         },
         scheduleGapless: ({ context }) => {
           this._tryScheduleGapless(context.currentTrackIndex);
@@ -278,12 +279,12 @@ export class Queue implements TrackQueueRef {
     this._actor.send({ type: 'PREVIOUS' });
   }
 
-  gotoTrack(index: number, playImmediately = false): void {
+  gotoTrack(index: number, playImmediately = false, startTime?: number): void {
     if (index < 0 || index >= this._tracks.length) return;
     this.onDebug(
-      `gotoTrack(${index}, playImmediately=${playImmediately}) queueState=${this._actor.getSnapshot().value} curIdx=${this._actor.getSnapshot().context.currentTrackIndex}`
+      `gotoTrack(${index}, playImmediately=${playImmediately}, startTime=${startTime}) queueState=${this._actor.getSnapshot().value} curIdx=${this._actor.getSnapshot().context.currentTrackIndex}`
     );
-    this._actor.send({ type: 'GOTO', index, playImmediately });
+    this._actor.send({ type: 'GOTO', index, playImmediately, startTime });
   }
 
   seek(time: number): void {
