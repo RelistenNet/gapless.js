@@ -577,7 +577,7 @@ export class Track {
   private _playHtml5(): void {
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
     this.audio.playbackRate = this.queueRef.playbackRate;
-    if (isFinite(this.pausedAtTrackTime) && Math.abs(this.audio.currentTime - this.pausedAtTrackTime) > 0.5) {
+    if (isFinite(this.pausedAtTrackTime) && this.pausedAtTrackTime > this.audio.currentTime + 0.5) {
       if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
         this.audio.currentTime = this.pausedAtTrackTime;
       } else {
