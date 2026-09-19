@@ -626,10 +626,21 @@ export class Track {
         }
       }, delayMs);
     } else if (!this._html5GainNode) {
-      const savedVolume = this.audio.volume;
-      this.audio.volume = 0;
-      this.audio.pause();
-      this.audio.volume = savedVolume;
+      // No MediaElementSource path (CORS blocked or legacy browser).
+      // Delay the HTML5 pause until the WebAudio source actually starts
+      // at `when` so there's no silence gap during the scheduling lead.
+      if (when !== null && this.ctx) {
+        const delayMs = (when - this.ctx.currentTime) * 1000;
+        setTimeout(() => {
+          this.audio.volume = 0;
+          this.audio.pause();
+          this.audio.volume = 1;
+        }, Math.max(0, delayMs));
+      } else {
+        this.audio.volume = 0;
+        this.audio.pause();
+        this.audio.volume = 1;
+      }
     }
 
     this.queueRef.onDebug(
