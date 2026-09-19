@@ -273,7 +273,7 @@ export function createTrackMachine(initialContext: TrackContext) {
       html5: {
         on: {
           PAUSE: {
-            actions: ['clearIsPlaying', 'pauseHtml5', 'stopProgressLoop', 'reportProgress'],
+            actions: ['clearIsPlaying', 'freezePausedTime', 'pauseHtml5', 'stopProgressLoop', 'reportProgress'],
           },
           PLAY: {
             actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop'],
