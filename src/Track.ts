@@ -577,6 +577,16 @@ export class Track {
   private _playHtml5(): void {
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
     this.audio.playbackRate = this.queueRef.playbackRate;
+    if (isFinite(this.pausedAtTrackTime) && Math.abs(this.audio.currentTime - this.pausedAtTrackTime) > 0.5) {
+      if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        this.audio.currentTime = this.pausedAtTrackTime;
+      } else {
+        const target = this.pausedAtTrackTime;
+        this.audio.addEventListener('loadedmetadata', () => {
+          this.audio.currentTime = target;
+        }, { once: true });
+      }
+    }
     const promise = this.audio.play();
     if (promise) {
       promise.catch((err: unknown) => {
