@@ -540,7 +540,7 @@ export class Track {
   private _playHtml5(seekTarget: number): void {
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
     this.audio.playbackRate = this.queueRef.playbackRate;
-    if (isFinite(seekTarget) && seekTarget > this.audio.currentTime + 0.5) {
+    if (seekTarget > 0 && Math.abs(this.audio.currentTime - seekTarget) > 0.01) {
       if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
         this.audio.currentTime = seekTarget;
       } else {
