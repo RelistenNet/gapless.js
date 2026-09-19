@@ -9,8 +9,9 @@ describe('crossover end-to-end flow', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onDebug: (m: string) => debug.push(m) });
     q.play();
     for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
-    // The HTML5 element is paused after the crossfade completes (~30 ms).
-    await new Promise(r => setTimeout(r, 50));
+    // The HTML5 element is paused after the crossfade completes.
+    // The delay includes the scheduling lead (~50 ms) plus the fade (~30 ms).
+    await new Promise(r => setTimeout(r, 150));
 
     const tracks = (q as any)._tracks;
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
@@ -100,7 +101,7 @@ describe('crossover end-to-end flow', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
     for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 50)); // wait for crossfade to complete
+    await new Promise(r => setTimeout(r, 150));
 
     const tracks = (q as any)._tracks;
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
@@ -144,12 +145,10 @@ describe('crossover end-to-end flow', () => {
     expect(tracks[0].trackUrl).toBe('https://cdn.example.com/redirected.mp3');
   });
 
-  it('starts the WebAudio source at audio.currentTime (alignment shift disabled pending root-cause)', async () => {
-    // We previously tried two alignment heuristics (duration-delta, then
-    // first-non-silent-sample scan) under the hypothesis that decoded buffer
-    // start padding was causing a backward skip at crossover. Neither fully
-    // eliminated the skip, so the shift is currently disabled; this test
-    // pins down the present behavior so a future fix can update it.
+  it('starts the WebAudio source near audio.currentTime (corrected for scheduling lead)', async () => {
+    // The source starts at audio.currentTime + lead*rate to align with where
+    // the HTML5 element will be at the actual WebAudio start instant, avoiding
+    // a backward jump at the crossfade point.
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
@@ -165,7 +164,10 @@ describe('crossover end-to-end flow', () => {
     const startedSource = allSources.find(s => s.start.mock.calls.length > 0);
     expect(startedSource).toBeDefined();
     const [, offsetArg] = startedSource!.start.mock.calls[0];
-    expect(offsetArg).toBeCloseTo(4, 2);
+    // With the scheduling lead (≥20 ms at 1x rate), the source starts
+    // slightly ahead of the captured audio.currentTime.
+    expect(offsetArg).toBeCloseTo(4, 1);
+    expect(offsetArg).toBeGreaterThanOrEqual(4);
   });
 
   it('seek-near-end keeps the next track audible after cancel-and-reschedule (regression)', async () => {

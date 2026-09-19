@@ -48,7 +48,7 @@ describe('media key support via silent anchor element', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
     for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 150));
 
     const tracks = (q as any)._tracks;
     expect(tracks[0].machineState).toBe('webaudio');

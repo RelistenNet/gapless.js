@@ -108,6 +108,7 @@ export class MockAudioContext {
     return _contextTime;
   }
   state: AudioContextState = 'running';
+  baseLatency = 0;
 
   createBufferSource = vi.fn(() => new MockAudioBufferSourceNode());
   createGain = vi.fn(() => new MockGainNode());

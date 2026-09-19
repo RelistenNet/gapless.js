@@ -273,6 +273,11 @@ export class Track {
           // half a second of silence/garbage. _bufferStartPaddingSec is
           // computed at decode time via _ensureBufferAlignment.
           this.sourceNode.start(when, this._bufferStartPaddingSec);
+          const bufRemaining = this.audioBuffer.duration - this._bufferStartPaddingSec;
+          const schedRate = this.sourceNode.playbackRate.value || 1;
+          if (bufRemaining > 0) {
+            this.sourceNode.stop(when + bufRemaining / schedRate);
+          }
           this._waRefCtxTime = when;
           this._waRefTrackTime = 0;
           this.queueRef.onDebug(
@@ -353,14 +358,33 @@ export class Track {
   }
 
   setPlaybackRate(rate: number): void {
-    // Freeze current track position at the old rate before switching
-    if (this.ctx && this.sourceNode && this._actor.getSnapshot().context.isPlaying) {
+    // Freeze current track position at the old rate before switching.
+    // Skip the anchor rewrite during the scheduling lead (when the source
+    // is scheduled but ctx.currentTime hasn't reached _waRefCtxTime yet) —
+    // the source hasn't started producing audio, so the anchors are still
+    // correct for the future start. Rewriting them with a negative elapsed
+    // time would corrupt playbackEndContextTime and cause overlap/gap.
+    if (this.ctx && this.sourceNode && this._actor.getSnapshot().context.isPlaying
+        && this.ctx.currentTime >= this._waRefCtxTime) {
       const oldRate = this.sourceNode.playbackRate.value;
       this._waRefTrackTime = this._waRefTrackTime + (this.ctx.currentTime - this._waRefCtxTime) * oldRate;
       this._waRefCtxTime = this.ctx.currentTime;
     }
     this.audio.playbackRate = rate;
-    if (this.sourceNode) this.sourceNode.playbackRate.value = rate;
+    if (this.sourceNode) {
+      this.sourceNode.playbackRate.value = rate;
+      // Re-issue the hard stop ceiling at the new end time. The spec
+      // allows repeated stop() calls (latest wins), so this overwrites
+      // the stale stop scheduled at the old rate.
+      if (this.audioBuffer && this.ctx) {
+        const remaining = this.audioBuffer.duration - this._bufferStartPaddingSec - this._waRefTrackTime;
+        if (remaining > 0) {
+          try {
+            this.sourceNode.stop(this._waRefCtxTime + remaining / rate);
+          } catch { /* already stopped */ }
+        }
+      }
+    }
   }
 
   preload(): void {
@@ -411,15 +435,34 @@ export class Track {
   // Gapless scheduling (called by Queue)
   // --------------------------------------------------------------------------
 
+  /** Schedule the HTML5 gain node to mute at `when` — safety valve so an
+   *  HTML5 element that runs past the predicted end is silenced instead of
+   *  overlapping the next track. No-op if the HTML5 gain path isn't active. */
+  scheduleHtml5Mute(when: number): void {
+    if (!this._html5GainNode || !this.ctx) return;
+    this._html5GainNode.gain.setValueAtTime(1, when - 0.005);
+    this._html5GainNode.gain.linearRampToValueAtTime(0, when);
+  }
+
+  /** Cancel any scheduled HTML5 gain mute (called when gapless is cancelled). */
+  cancelHtml5Mute(): void {
+    if (!this._html5GainNode || !this.ctx) return;
+    this._html5GainNode.gain.cancelScheduledValues(this.ctx.currentTime);
+    this._html5GainNode.gain.setValueAtTime(1, this.ctx.currentTime);
+  }
+
   cancelGaplessStart(): void {
     const snap = this._actor.getSnapshot();
     if (snap.context.scheduledStartContextTime === null) return;
     this._actor.send({ type: 'CANCEL_GAPLESS' });
   }
 
-  scheduleGaplessStart(when: number): void {
-    if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
+  scheduleGaplessStart(when: number): boolean {
+    if (!this.ctx || !this.audioBuffer || !this.gainNode) return false;
+    const state = this._actor.getSnapshot().value;
+    if (state !== 'idle' && state !== 'loading') return false;
     this._actor.send({ type: 'SCHEDULE_GAPLESS', when });
+    return true;
   }
 
   // --------------------------------------------------------------------------
@@ -605,51 +648,46 @@ export class Track {
       return;
     }
 
-    // Sample-accurate crossfade. Both sides live on the AudioContext clock:
-    //   • HTML5 path:    mediaElementSource → _html5GainNode → gainNode → destination
-    //   • WebAudio path: source → fadeGain → gainNode → destination
-    //
-    // We schedule a 1→0 ramp on _html5GainNode and a 0→1 ramp on the WebAudio
-    // fadeGain, both over CROSSOVER_FADE_SEC and both starting at the same
-    // ctx-clock time. The two streams overlap with constant-summed gain
-    // through the fade window, smoothing out the sample-level discontinuity
-    // that an instant cut would otherwise leave audible as a "blip".
-    //
-    // If _html5GainNode wasn't created (createMediaElementSource fell back —
-    // e.g. CORS blocked or legacy browser), we degrade to immediate pause +
-    // WebAudio fade-in only.
-    const t0 = this.ctx.currentTime;
-    const t1 = t0 + CROSSOVER_FADE_SEC;
+    // Start the WebAudio source first to learn the exact context-clock time
+    // it will begin producing audio (the "when" returned by _startSourceNode).
+    // Then align the HTML5 fade-out to that same instant so both crossfade
+    // halves overlap at constant-summed gain.
+    const when = this._startSourceNode(this.pausedAtTrackTime, CROSSOVER_FADE_SEC);
 
-    if (this._html5GainNode) {
-      this._html5GainNode.gain.cancelScheduledValues(t0);
-      this._html5GainNode.gain.setValueAtTime(1, t0);
-      this._html5GainNode.gain.linearRampToValueAtTime(0, t1);
-      // Pause the HTML5 element after the fade completes — it stops consuming
-      // network/decoder resources and the gain is back to silent regardless.
-      // Reset the gain to 1 afterwards so future plays through this element
-      // (post-deactivate/reactivate) start at full level.
+    if (when !== null && this._html5GainNode) {
+      this._html5GainNode.gain.cancelScheduledValues(when);
+      this._html5GainNode.gain.setValueAtTime(1, when);
+      this._html5GainNode.gain.linearRampToValueAtTime(0, when + CROSSOVER_FADE_SEC);
       const ctxRef = this.ctx;
       const html5GainRef = this._html5GainNode;
+      const delayMs = (when - this.ctx.currentTime + CROSSOVER_FADE_SEC) * 1000 + 5;
       setTimeout(() => {
         this.audio.pause();
         if (ctxRef && html5GainRef) {
           html5GainRef.gain.cancelScheduledValues(ctxRef.currentTime);
           html5GainRef.gain.setValueAtTime(1, ctxRef.currentTime);
         }
-      }, CROSSOVER_FADE_SEC * 1000 + 5);
-    } else {
-      // Fallback: no MediaElementSource path. Silence HTML5 immediately.
-      const savedVolume = this.audio.volume;
-      this.audio.volume = 0;
-      this.audio.pause();
-      this.audio.volume = savedVolume;
+      }, delayMs);
+    } else if (!this._html5GainNode) {
+      // No MediaElementSource path (CORS blocked or legacy browser).
+      // Delay the HTML5 pause until the WebAudio source actually starts
+      // at `when` so there's no silence gap during the scheduling lead.
+      if (when !== null && this.ctx) {
+        const delayMs = (when - this.ctx.currentTime) * 1000;
+        setTimeout(() => {
+          this.audio.volume = 0;
+          this.audio.pause();
+          this.audio.volume = 1;
+        }, Math.max(0, delayMs));
+      } else {
+        this.audio.volume = 0;
+        this.audio.pause();
+        this.audio.volume = 1;
+      }
     }
 
-    this._startSourceNode(this.pausedAtTrackTime, CROSSOVER_FADE_SEC);
-
     this.queueRef.onDebug(
-      `crossoverHtml5ToWebAudio track=${this.index} offset=${this.pausedAtTrackTime.toFixed(3)} wasPlaying=true fade=${CROSSOVER_FADE_SEC}s mediaSource=${!!this._html5GainNode}`
+      `crossoverHtml5ToWebAudio track=${this.index} offset=${this.pausedAtTrackTime.toFixed(3)} wasPlaying=true fade=${CROSSOVER_FADE_SEC}s mediaSource=${!!this._html5GainNode} when=${when?.toFixed(3) ?? 'null'}`
     );
   }
 
@@ -671,16 +709,13 @@ export class Track {
     );
   }
 
-  private _startSourceNode(offset: number, fadeInSec = 0): void {
-    if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
-    // Re-check alignment in case audio.duration became available since the
-    // last computation (e.g., preloaded track whose metadata load completed).
+  private _startSourceNode(offset: number, fadeInSec = 0): number | null {
+    if (!this.ctx || !this.audioBuffer || !this.gainNode) return null;
     this._maybeComputeBufferAlignment();
     this._stopSourceNode();
 
-    // Ensure the AudioContext is running (it may have been suspended after
-    // the previous track's source was disconnected).
-    if (this.ctx.state === 'suspended') {
+    const wasSuspended = this.ctx.state === 'suspended';
+    if (wasSuspended) {
       this.ctx.resume();
     }
 
@@ -688,30 +723,53 @@ export class Track {
     this.sourceNode.buffer = this.audioBuffer;
     this.sourceNode.playbackRate.value = this.queueRef.playbackRate;
 
-    // When fadeInSec > 0 (crossover path), insert a per-source fade gain
-    // between the source and the master gainNode. This gain ramps 0 → 1 over
-    // fadeInSec so the new Web Audio output rises in step with the HTML5
-    // element's audio-pipeline tail decaying. The master gainNode (which
-    // represents user volume) is unaffected.
+    // Schedule the source at an explicit future time rather than start(0).
+    // start(0) dispatches to the audio render thread asynchronously — the
+    // actual start lags the main-thread currentTime read by up to one
+    // hardware callback period (5-100 ms depending on device). That δ makes
+    // playbackEndContextTime compute an end time δ too early, causing the
+    // next gapless track to overlap briefly. Using start(when) with an
+    // explicit when that matches _waRefCtxTime eliminates the mismatch.
+    const lead = wasSuspended
+      ? 0.15
+      : Math.max(0.02, 2 * ((this.ctx as unknown as { baseLatency?: number }).baseLatency || 0) + 0.01);
+    const when = this.ctx.currentTime + lead;
+
+    // Advance the buffer start position by the lead so the source begins
+    // from where playback will actually be at `when`, not where it was at
+    // the moment we read currentTime. This keeps the currentTime formula
+    // (waRefTrackTime + (ctx.currentTime - waRefCtxTime) * rate) equal to
+    // `offset` immediately after the call without accumulating drift across
+    // pause/resume cycles. During crossover it also aligns the WebAudio
+    // source to where the HTML5 element will be at the fade point.
+    // The skipped interval (≤20 ms at 1× rate) is below audible threshold.
+    const rate = this.queueRef.playbackRate;
+    const maxOffset = this.audioBuffer.duration - this._bufferStartPaddingSec;
+    const effectiveOffset = Math.min(offset + lead * rate, maxOffset);
+
     if (fadeInSec > 0) {
       const fadeNode = this.ctx.createGain();
-      const t0 = this.ctx.currentTime;
-      fadeNode.gain.setValueAtTime(0, t0);
-      fadeNode.gain.linearRampToValueAtTime(1, t0 + fadeInSec);
+      fadeNode.gain.setValueAtTime(0, when);
+      fadeNode.gain.linearRampToValueAtTime(1, when + fadeInSec);
       this.sourceNode.connect(fadeNode);
       fadeNode.connect(this.gainNode);
     } else {
       this.sourceNode.connect(this.gainNode);
     }
-    // gainNode → destination connected once at ctx setup; do not re-connect.
     this.sourceNode.onended = this._handleWebAudioEnded;
 
-    this._waRefCtxTime = this.ctx.currentTime;
-    this._waRefTrackTime = offset;
-    // Buffer-internal offset = music-time offset + decoded-buffer start padding.
-    // See _bufferStartPaddingSec docs for why this is necessary on MP3 files
-    // with ID3v2 tags or encoder priming samples.
-    this.sourceNode.start(0, offset + this._bufferStartPaddingSec);
+    this._waRefCtxTime = when;
+    this._waRefTrackTime = effectiveOffset;
+    this.sourceNode.start(when, effectiveOffset + this._bufferStartPaddingSec);
+
+    // Hard ceiling: stop the source at its computed end time so any
+    // platform-level late start (render thread couldn't honor `when`)
+    // produces an inaudible truncation instead of overlap with the next track.
+    const bufRemaining = this.audioBuffer.duration - this._bufferStartPaddingSec - effectiveOffset;
+    if (bufRemaining > 0) {
+      this.sourceNode.stop(when + bufRemaining / rate);
+    }
+    return when;
   }
 
   private _stopSourceNode(): void {
