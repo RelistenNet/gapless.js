@@ -18,6 +18,7 @@ function makeCtx(overrides: Partial<TrackContext> = {}): TrackContext {
     scheduledStartContextTime: null,
     notifiedLookahead: false,
     fetchStarted: false,
+    pendingPlay: false,
     ...overrides,
   };
 }

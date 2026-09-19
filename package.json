@@ -22,7 +22,7 @@
   "private": false,
   "scripts": {
     "test": "vitest run",
-    "build": "tsup",
+    "build": "tsup && tsc -p tsconfig.build.json",
     "build:demo": "pnpm --dir demo build",
     "dev": "pnpm --dir demo dev",
     "types": "tsc --noEmit",
@@ -37,18 +37,18 @@
   "author": "Daniel Saewitz",
   "license": "MIT",
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
+    "@playwright/test": "^1.63.0",
     "@switz/eslint-config": "^13.1.0",
-    "@vitest/coverage-v8": "^4.1.8",
-    "eslint": "^10.4.1",
-    "happy-dom": "^20.10.2",
-    "playwright": "^1.60.0",
+    "@vitest/coverage-v8": "^5.0.1",
+    "eslint": "^10.11.0",
+    "happy-dom": "^20.14.5",
+    "playwright": "^1.63.0",
     "tsup": "^8.5.1",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
   },
   "packageManager": "pnpm@10.30.2",
   "dependencies": {
-    "xstate": "^5.32.0"
+    "xstate": "^5.33.2"
   }
 }

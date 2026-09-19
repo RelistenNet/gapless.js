@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Queue } from '../../src/Queue';
-import { mockFetchSuccess, mockFetchRedirect, MockAudioElement, MockAudioBuffer, advanceTime, MockGainNode } from '../setup';
+import { mockFetchSuccess, mockFetchRedirect, MockAudioElement, advanceTime, MockGainNode } from '../setup';
 
 describe('crossover end-to-end flow', () => {
   it('after q.play() + decode, current track crosses over and HTML5 element is paused', async () => {

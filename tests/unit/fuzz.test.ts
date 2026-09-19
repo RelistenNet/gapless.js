@@ -8,7 +8,7 @@
 // logged on failure so failing runs can be replayed.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { Queue } from '../../src/Queue';
 import type { Track } from '../../src/Track';
 import { mockFetchSuccess, mockFetchFailure } from '../setup';

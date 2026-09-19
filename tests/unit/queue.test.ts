@@ -5,7 +5,7 @@
 // Verifies callbacks, state transitions, track management, and preloading.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Queue } from '../../src/Queue';
 import type { TrackInfo } from '../../src/types';
 import { MockAudioBuffer, MockAudioContext, MockAudioElement, advanceTime, mockFetchSuccess, mockFetchFailure } from '../setup';
@@ -359,6 +359,7 @@ describe('Queue onTrackEnded resets finished track', () => {
     _waRefCtxTime: number;
     _waRefTrackTime: number;
     pausedAtTrackTime: number;
+    sourceNode: { simulateEnded(): void } | null;
   };
   type InternalQueue = { _tracks: InternalTrack[] };
 
@@ -412,8 +413,7 @@ describe('Queue onTrackEnded resets finished track', () => {
     const internal = q as unknown as InternalQueue;
     // Track 0 is in webaudio state — end it via the source node's onended,
     // not the HTML5 element's (HTML5_ENDED is not handled in webaudio state).
-    const sourceNode = internal._tracks[0].sourceNode as { simulateEnded(): void };
-    sourceNode.simulateEnded();
+    internal._tracks[0].sourceNode!.simulateEnded();
     await Promise.resolve();
 
     expect(internal._tracks[0]._waRefCtxTime).toBe(0);

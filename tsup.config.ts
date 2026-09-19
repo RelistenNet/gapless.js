@@ -8,7 +8,7 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   minify: true,
-  dts: true,
+  dts: false,
   // Mark xstate as external so consumers can share a single instance
   external: ['xstate'],
 });

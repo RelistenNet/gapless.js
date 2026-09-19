@@ -7,7 +7,6 @@ import { createActor } from 'xstate';
 import { Queue } from '../../src/Queue';
 import { Track } from '../../src/Track';
 import type { TrackQueueRef } from '../../src/Track';
-import type { TrackInfo } from '../../src/types';
 import { createTrackMachine } from '../../src/machines/track.machine';
 import type { TrackContext } from '../../src/machines/track.machine';
 import { MockAudioBuffer, MockAudioElement, advanceTime } from '../setup';

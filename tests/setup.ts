@@ -7,7 +7,7 @@
 // in pure Node.js without a real browser.
 // ---------------------------------------------------------------------------
 
-import { vi, beforeEach } from 'vitest';
+import { vi, type Mock, beforeEach } from 'vitest';
 import { _resetAudioContext, _setAudioContext } from '../src/utils/audioContext';
 
 // ---------------------------------------------------------------------------
@@ -35,8 +35,8 @@ export class MockAudioBufferSourceNode {
   private _started = false;
   private _stopped = false;
 
-  connect = vi.fn();
-  disconnect = vi.fn();
+  connect: Mock = vi.fn();
+  disconnect: Mock = vi.fn();
 
   start = vi.fn((_when?: number, _offset?: number) => {
     if (this._started) throw new Error('InvalidStateError: already started');
@@ -58,19 +58,19 @@ export class MockAudioBufferSourceNode {
 // Mock GainNode
 // ---------------------------------------------------------------------------
 export class MockGainNode {
-  gain = {
+  gain: { value: number; setValueAtTime: Mock; linearRampToValueAtTime: Mock; cancelScheduledValues: Mock } = {
     value: 1,
     setValueAtTime: vi.fn(),
     linearRampToValueAtTime: vi.fn(),
     cancelScheduledValues: vi.fn(),
   };
-  connect = vi.fn();
-  disconnect = vi.fn();
+  connect: Mock = vi.fn();
+  disconnect: Mock = vi.fn();
 }
 
 export class MockMediaElementAudioSourceNode {
-  connect = vi.fn();
-  disconnect = vi.fn();
+  connect: Mock = vi.fn();
+  disconnect: Mock = vi.fn();
   constructor(public mediaElement: unknown) {}
 }
 
@@ -157,7 +157,7 @@ export class MockAudioElement {
     this.paused = true;
   });
 
-  load = vi.fn();
+  load: Mock = vi.fn();
 
   addEventListener = vi.fn(
     (type: string, cb: EventListenerOrEventListenerObject, opts?: AddEventListenerOptions) => {
@@ -199,7 +199,7 @@ export class MockAudioElement {
 // ---------------------------------------------------------------------------
 // Mock fetch
 // ---------------------------------------------------------------------------
-export function mockFetchSuccess(arrayBuffer = new ArrayBuffer(1024)) {
+export function mockFetchSuccess(arrayBuffer = new ArrayBuffer(1024)): Mock {
   const spy = vi.fn().mockResolvedValue({
     ok: true,
     url: '',
