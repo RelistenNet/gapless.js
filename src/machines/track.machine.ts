@@ -187,6 +187,7 @@ export function createTrackMachine(initialContext: TrackContext) {
               'resetTiming',
               'stopProgressLoop',
               'clearScheduleAndLookahead',
+              'clearPendingPlay',
             ],
           },
           ACTIVATE: {
@@ -194,6 +195,7 @@ export function createTrackMachine(initialContext: TrackContext) {
               'resetTiming',
               'resetHtml5Element',
               'clearScheduleAndLookahead',
+              'clearPendingPlay',
             ],
           },
           PLAY: [
@@ -400,13 +402,14 @@ export function createTrackMachine(initialContext: TrackContext) {
             target: 'idle',
             actions: [
               'clearPlayingAndSchedule',
+              'clearPendingPlay',
               'resetTiming',
               'resetHtml5Element',
             ],
           },
           DEACTIVATE: {
             target: 'idle',
-            actions: ['clearIsPlaying', 'resetTiming'],
+            actions: ['clearIsPlaying', 'clearPendingPlay', 'resetTiming'],
           },
           URL_RESOLVED: {
             actions: 'setResolvedUrl',

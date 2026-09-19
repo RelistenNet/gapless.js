@@ -273,6 +273,11 @@ export class Track {
           // half a second of silence/garbage. _bufferStartPaddingSec is
           // computed at decode time via _ensureBufferAlignment.
           this.sourceNode.start(when, this._bufferStartPaddingSec);
+          const bufRemaining = this.audioBuffer.duration - this._bufferStartPaddingSec;
+          const schedRate = this.sourceNode.playbackRate.value || 1;
+          if (bufRemaining > 0) {
+            this.sourceNode.stop(when + bufRemaining / schedRate);
+          }
           this._waRefCtxTime = when;
           this._waRefTrackTime = 0;
           this.queueRef.onDebug(
@@ -417,15 +422,34 @@ export class Track {
   // Gapless scheduling (called by Queue)
   // --------------------------------------------------------------------------
 
+  /** Schedule the HTML5 gain node to mute at `when` — safety valve so an
+   *  HTML5 element that runs past the predicted end is silenced instead of
+   *  overlapping the next track. No-op if the HTML5 gain path isn't active. */
+  scheduleHtml5Mute(when: number): void {
+    if (!this._html5GainNode || !this.ctx) return;
+    this._html5GainNode.gain.setValueAtTime(1, when - 0.005);
+    this._html5GainNode.gain.linearRampToValueAtTime(0, when);
+  }
+
+  /** Cancel any scheduled HTML5 gain mute (called when gapless is cancelled). */
+  cancelHtml5Mute(): void {
+    if (!this._html5GainNode || !this.ctx) return;
+    this._html5GainNode.gain.cancelScheduledValues(this.ctx.currentTime);
+    this._html5GainNode.gain.setValueAtTime(1, this.ctx.currentTime);
+  }
+
   cancelGaplessStart(): void {
     const snap = this._actor.getSnapshot();
     if (snap.context.scheduledStartContextTime === null) return;
     this._actor.send({ type: 'CANCEL_GAPLESS' });
   }
 
-  scheduleGaplessStart(when: number): void {
-    if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
+  scheduleGaplessStart(when: number): boolean {
+    if (!this.ctx || !this.audioBuffer || !this.gainNode) return false;
+    const state = this._actor.getSnapshot().value;
+    if (state !== 'idle' && state !== 'loading') return false;
     this._actor.send({ type: 'SCHEDULE_GAPLESS', when });
+    return true;
   }
 
   // --------------------------------------------------------------------------
@@ -724,6 +748,14 @@ export class Track {
     this._waRefCtxTime = when;
     this._waRefTrackTime = effectiveOffset;
     this.sourceNode.start(when, effectiveOffset + this._bufferStartPaddingSec);
+
+    // Hard ceiling: stop the source at its computed end time so any
+    // platform-level late start (render thread couldn't honor `when`)
+    // produces an inaudible truncation instead of overlap with the next track.
+    const bufRemaining = this.audioBuffer.duration - this._bufferStartPaddingSec - effectiveOffset;
+    if (bufRemaining > 0) {
+      this.sourceNode.stop(when + bufRemaining / rate);
+    }
     return when;
   }
 

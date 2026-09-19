@@ -529,6 +529,9 @@ export class Queue implements TrackQueueRef {
       track.cancelGaplessStart();
       this.onDebug(`_cancelScheduledGapless: cancelled track ${this._scheduledNextIndex}`);
     }
+    // Cancel any HTML5 gain mute that was scheduled on the current track.
+    const cur = this._trackAt(this._actor.getSnapshot().context.currentTrackIndex);
+    if (cur) cur.cancelHtml5Mute();
     this._scheduledNextIndex = null;
   }
 
@@ -563,7 +566,18 @@ export class Queue implements TrackQueueRef {
       return;
     }
 
-    next.scheduleGaplessStart(endTime);
+    if (!next.scheduleGaplessStart(endTime)) {
+      this.onDebug(
+        `_tryScheduleGapless: track ${nextIndex} rejected SCHEDULE_GAPLESS (state=${next.machineState})`
+      );
+      return;
+    }
+    // When scheduling from an HTML5-clock prediction, mute the HTML5 gain
+    // at endTime so a stalled/late HTML5 element is silenced rather than
+    // overlapping the next track.
+    if (current.playbackType === 'HTML5') {
+      current.scheduleHtml5Mute(endTime);
+    }
     this.onDebug(
       `_tryScheduleGapless: scheduled track ${nextIndex} at endTime=${endTime.toFixed(3)} (in ${(endTime - ctx.currentTime).toFixed(1)}s) curPlaybackType=${current.playbackType}`
     );
