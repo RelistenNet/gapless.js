@@ -371,7 +371,20 @@ export class Track {
       this._waRefCtxTime = this.ctx.currentTime;
     }
     this.audio.playbackRate = rate;
-    if (this.sourceNode) this.sourceNode.playbackRate.value = rate;
+    if (this.sourceNode) {
+      this.sourceNode.playbackRate.value = rate;
+      // Re-issue the hard stop ceiling at the new end time. The spec
+      // allows repeated stop() calls (latest wins), so this overwrites
+      // the stale stop scheduled at the old rate.
+      if (this.audioBuffer && this.ctx) {
+        const remaining = this.audioBuffer.duration - this._bufferStartPaddingSec - this._waRefTrackTime;
+        if (remaining > 0) {
+          try {
+            this.sourceNode.stop(this._waRefCtxTime + remaining / rate);
+          } catch { /* already stopped */ }
+        }
+      }
+    }
   }
 
   preload(): void {
