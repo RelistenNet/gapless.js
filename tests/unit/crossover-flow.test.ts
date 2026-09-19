@@ -202,6 +202,36 @@ describe('crossover end-to-end flow', () => {
     expect(internal._scheduledNextIndex).toBe(1);
   });
 
+  it('crossover preserves pausedAtTrackTime when HTML5 element has not caught up to a prior seek', async () => {
+    mockFetchSuccess();
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
+
+    // Simulate gotoTrack with a startTime — this sets pausedAtTrackTime on the
+    // track to 31.5, but the HTML5 element's currentTime stays low because
+    // the element hasn't loaded/seeked yet.
+    q.gotoTrack(0, false, 31.5);
+    for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0));
+
+    const tracks = (q as any)._tracks;
+    // HTML5 element's currentTime is still near 0
+    (tracks[0].audio as MockAudioElement).currentTime = 1.3;
+
+    q.play();
+    for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 150));
+
+    expect(tracks[0].playbackType).toBe('WEBAUDIO');
+
+    // The WebAudio source should have started near 31.5, not at 1.3
+    const sourceCreate = (tracks[0].ctx.createBufferSource as ReturnType<typeof vi.fn>);
+    const allSources = sourceCreate.mock.results.map((r) => r.value as { start: ReturnType<typeof vi.fn> });
+    const startedSource = allSources.find(s => s.start.mock.calls.length > 0);
+    expect(startedSource).toBeDefined();
+    const [, offsetArg] = startedSource!.start.mock.calls[0];
+    expect(offsetArg).toBeGreaterThanOrEqual(31.5);
+    expect(offsetArg).toBeLessThan(33);
+  });
+
   it('after crossover, gapless scheduling targets the next track via WebAudio→WebAudio', async () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
