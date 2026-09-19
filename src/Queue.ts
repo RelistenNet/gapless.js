@@ -146,13 +146,8 @@ export class Queue implements TrackQueueRef {
         deactivateEndedTrack: ({ context }) => {
           this._trackAt(context.currentTrackIndex)?.deactivate();
         },
-        activateAndPlayCurrent: ({ context }) => {
-          const track = this._trackAt(context.currentTrackIndex);
-          if (!track) return;
-          track.activate();
-          if (this._scheduledNextIndex !== track.index) {
-            track.play();
-          }
+        activateCurrent: ({ context }) => {
+          this._trackAt(context.currentTrackIndex)?.activate();
         },
         playOrContinueGapless: ({ context }) => {
           const cur = this._trackAt(context.currentTrackIndex);

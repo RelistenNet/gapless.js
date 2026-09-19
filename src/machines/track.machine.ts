@@ -47,6 +47,8 @@ export interface TrackContext {
   fetchStarted: boolean;
   /** True when PLAY was received in webAudioOnly mode before buffer is ready. */
   pendingPlay: boolean;
+  /** Track-time (seconds) the user last seeked to, or frozen pause position. */
+  seekTarget: number;
 }
 
 // ---- Events ----------------------------------------------------------------
@@ -91,6 +93,7 @@ export function createTrackMachine(initialContext: TrackContext) {
       playHtml5: () => {},
       startSourceNode: () => {},
       crossoverHtml5ToWebAudio: () => {},
+      syncSeekTargetFromCrossover: () => {},
       notifyBufferReady: () => {},
       startScheduledSourceNode: () => {},
       startProgressLoop: () => {},
@@ -105,6 +108,10 @@ export function createTrackMachine(initialContext: TrackContext) {
       resetTiming: () => {},
       notifyTrackEnded: () => {},
       triggerFetchForPendingPlay: () => {},
+      setSeekTarget: assign({
+        seekTarget: ({ event }) => (event as { type: 'SEEK'; time: number }).time,
+      }),
+      clearSeekTarget: assign({ seekTarget: () => 0 }),
       setPendingPlay: assign({ pendingPlay: () => true }),
       clearPendingPlay: assign({ pendingPlay: () => false }),
       setIsPlaying: assign({ isPlaying: () => true }),
@@ -177,6 +184,9 @@ export function createTrackMachine(initialContext: TrackContext) {
       // -----------------------------------------------------------------
       idle: {
         on: {
+          SEEK: {
+            actions: ['setSeekTarget', 'reportProgress'],
+          },
           HTML5_ENDED: {
             actions: ['notifyTrackEnded'],
           },
@@ -188,6 +198,7 @@ export function createTrackMachine(initialContext: TrackContext) {
               'stopProgressLoop',
               'clearScheduleAndLookahead',
               'clearPendingPlay',
+              'clearSeekTarget',
             ],
           },
           ACTIVATE: {
@@ -196,6 +207,7 @@ export function createTrackMachine(initialContext: TrackContext) {
               'resetHtml5Element',
               'clearScheduleAndLookahead',
               'clearPendingPlay',
+              'clearSeekTarget',
             ],
           },
           PLAY: [
@@ -214,12 +226,6 @@ export function createTrackMachine(initialContext: TrackContext) {
             },
             {
               target: 'html5',
-              // triggerFetchForPendingPlay also kicks off fetch+decode for the
-              // CURRENT track, not just the next one. That way BUFFER_READY
-              // fires while we're in html5, and crossoverHtml5ToWebAudio can
-              // hand the active track over to Web Audio mid-stream. The
-              // canStartFetch guard inside START_FETCH makes this a no-op if
-              // a fetch is already in flight (e.g. PLAY from loading state).
               actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop', 'triggerFetchForPendingPlay'],
             },
           ],
@@ -279,21 +285,12 @@ export function createTrackMachine(initialContext: TrackContext) {
             target: 'webaudio',
             actions: 'setPlayingWebAudio',
           },
-          // Mid-stream crossover to Web Audio. Running `crossoverHtml5ToWebAudio`
-          // synchronously captures audio.currentTime, pauses the HTML5 element,
-          // and starts a Web Audio source node at that exact offset. After the
-          // transition completes we're in webaudio state with isPlaying preserved
-          // (true if the track was playing, false if paused), so a subsequent
-          // PLAY in webaudio state will resume from pausedAtTrackTime.
-          //
-          // clearNotifiedLookahead resets the gapless lookahead flag so the
-          // webaudio progress loop can re-trigger scheduling with the accurate
-          // shared-clock end time, replacing any stale HTML5-clock prediction.
           BUFFER_READY: {
             target: 'webaudio',
             actions: [
               'setLoadedState',
               'crossoverHtml5ToWebAudio',
+              'syncSeekTargetFromCrossover',
               'setPlaybackTypeWebAudio',
               'clearNotifiedLookahead',
               'notifyBufferReady',
@@ -304,6 +301,7 @@ export function createTrackMachine(initialContext: TrackContext) {
           },
           SEEK: {
             actions: [
+              'setSeekTarget',
               'seekHtml5',
               'reportProgress',
             ],
@@ -323,6 +321,7 @@ export function createTrackMachine(initialContext: TrackContext) {
               'stopProgressLoop',
               'resetTiming',
               'resetHtml5Element',
+              'clearSeekTarget',
             ],
           },
           URL_RESOLVED: {
@@ -330,7 +329,7 @@ export function createTrackMachine(initialContext: TrackContext) {
           },
           DEACTIVATE: {
             target: 'idle',
-            actions: ['clearIsPlaying', 'pauseHtml5', 'resetHtml5Element', 'resetTiming', 'stopProgressLoop'],
+            actions: ['clearIsPlaying', 'pauseHtml5', 'resetHtml5Element', 'resetTiming', 'stopProgressLoop', 'clearSeekTarget'],
           },
         },
       },
@@ -340,6 +339,9 @@ export function createTrackMachine(initialContext: TrackContext) {
       // -----------------------------------------------------------------
       loading: {
         on: {
+          SEEK: {
+            actions: ['setSeekTarget', 'reportProgress'],
+          },
           BUFFER_LOADING: {
             actions: 'setLoadingState',
           },
@@ -374,12 +376,6 @@ export function createTrackMachine(initialContext: TrackContext) {
             },
             {
               target: 'html5',
-              // triggerFetchForPendingPlay also kicks off fetch+decode for the
-              // CURRENT track, not just the next one. That way BUFFER_READY
-              // fires while we're in html5, and crossoverHtml5ToWebAudio can
-              // hand the active track over to Web Audio mid-stream. The
-              // canStartFetch guard inside START_FETCH makes this a no-op if
-              // a fetch is already in flight (e.g. PLAY from loading state).
               actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop', 'triggerFetchForPendingPlay'],
             },
           ],
@@ -405,11 +401,12 @@ export function createTrackMachine(initialContext: TrackContext) {
               'clearPendingPlay',
               'resetTiming',
               'resetHtml5Element',
+              'clearSeekTarget',
             ],
           },
           DEACTIVATE: {
             target: 'idle',
-            actions: ['clearIsPlaying', 'clearPendingPlay', 'resetTiming'],
+            actions: ['clearIsPlaying', 'clearPendingPlay', 'resetTiming', 'clearSeekTarget'],
           },
           URL_RESOLVED: {
             actions: 'setResolvedUrl',
@@ -422,12 +419,6 @@ export function createTrackMachine(initialContext: TrackContext) {
       // -----------------------------------------------------------------
       webaudio: {
         on: {
-          // clearScheduledStart: once the source node is stopped, the
-          // scheduled start time no longer describes anything real — resume
-          // re-anchors the source at a later context time, so any end-time
-          // math based on scheduledStartContextTime + duration would land
-          // mid-track (scheduling the next track to start while this one is
-          // still audible).
           PAUSE: {
             actions: [
               'clearIsPlaying',
@@ -452,6 +443,7 @@ export function createTrackMachine(initialContext: TrackContext) {
           },
           SEEK: {
             actions: [
+              'setSeekTarget',
               'clearScheduledStart',
               'seekWebAudio',
               'reportProgress',
@@ -465,6 +457,7 @@ export function createTrackMachine(initialContext: TrackContext) {
               'stopSourceNode',
               'stopProgressLoop',
               'resetTiming',
+              'clearSeekTarget',
             ],
           },
           LOOKAHEAD_REACHED: {
@@ -482,9 +475,9 @@ export function createTrackMachine(initialContext: TrackContext) {
               'stopProgressLoop',
               'resetTiming',
               'resetHtml5Element',
+              'clearSeekTarget',
             ],
           },
-          // Bug #3 fix: DEACTIVATE from webaudio → idle (was staying in webaudio)
           DEACTIVATE: {
             target: 'idle',
             actions: [
@@ -493,6 +486,7 @@ export function createTrackMachine(initialContext: TrackContext) {
               'resetTiming',
               'resetHtml5Element',
               'stopProgressLoop',
+              'clearSeekTarget',
             ],
           },
         },

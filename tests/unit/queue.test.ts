@@ -358,7 +358,7 @@ describe('Queue onTrackEnded resets finished track', () => {
     currentTime: number;
     _waRefCtxTime: number;
     _waRefTrackTime: number;
-    pausedAtTrackTime: number;
+    seekTarget: number;
     sourceNode: { simulateEnded(): void } | null;
   };
   type InternalQueue = { _tracks: InternalTrack[] };
@@ -418,7 +418,7 @@ describe('Queue onTrackEnded resets finished track', () => {
 
     expect(internal._tracks[0]._waRefCtxTime).toBe(0);
     expect(internal._tracks[0]._waRefTrackTime).toBe(0);
-    expect(internal._tracks[0].pausedAtTrackTime).toBe(0);
+    expect(internal._tracks[0].seekTarget).toBe(0);
     expect(audioOf(q, 0).currentTime).toBe(0);
   });
 });
@@ -1467,10 +1467,10 @@ describe('Queue seek targets correct track', () => {
     q.next(); // → track 1
     q.seek(42);
     // Track 1 (current) should have been seeked
-    const tracks = (q as unknown as { _tracks: Array<{ pausedAtTrackTime: number }> })._tracks;
-    expect(tracks[1].pausedAtTrackTime).toBe(42);
+    const tracks = (q as unknown as { _tracks: Array<{ seekTarget: number }> })._tracks;
+    expect(tracks[1].seekTarget).toBe(42);
     // Track 0 should NOT have been seeked
-    expect(tracks[0].pausedAtTrackTime).toBe(0);
+    expect(tracks[0].seekTarget).toBe(0);
   });
 });
 

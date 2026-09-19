@@ -19,6 +19,7 @@ function makeCtx(overrides: Partial<TrackContext> = {}): TrackContext {
     notifiedLookahead: false,
     fetchStarted: false,
     pendingPlay: false,
+    seekTarget: 0,
     ...overrides,
   };
 }
