@@ -353,8 +353,14 @@ export class Track {
   }
 
   setPlaybackRate(rate: number): void {
-    // Freeze current track position at the old rate before switching
-    if (this.ctx && this.sourceNode && this._actor.getSnapshot().context.isPlaying) {
+    // Freeze current track position at the old rate before switching.
+    // Skip the anchor rewrite during the scheduling lead (when the source
+    // is scheduled but ctx.currentTime hasn't reached _waRefCtxTime yet) —
+    // the source hasn't started producing audio, so the anchors are still
+    // correct for the future start. Rewriting them with a negative elapsed
+    // time would corrupt playbackEndContextTime and cause overlap/gap.
+    if (this.ctx && this.sourceNode && this._actor.getSnapshot().context.isPlaying
+        && this.ctx.currentTime >= this._waRefCtxTime) {
       const oldRate = this.sourceNode.playbackRate.value;
       this._waRefTrackTime = this._waRefTrackTime + (this.ctx.currentTime - this._waRefCtxTime) * oldRate;
       this._waRefCtxTime = this.ctx.currentTime;
