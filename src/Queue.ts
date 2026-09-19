@@ -529,9 +529,11 @@ export class Queue implements TrackQueueRef {
       track.cancelGaplessStart();
       this.onDebug(`_cancelScheduledGapless: cancelled track ${this._scheduledNextIndex}`);
     }
-    // Cancel any HTML5 gain mute that was scheduled on the current track.
+    // Cancel any HTML5 gain mute that was scheduled on the current track,
+    // but only if it's still in HTML5 state. After crossover the gain node
+    // is managed by the crossfade ramp — cancelScheduledValues would wipe it.
     const cur = this._trackAt(this._actor.getSnapshot().context.currentTrackIndex);
-    if (cur) cur.cancelHtml5Mute();
+    if (cur && cur.playbackType === 'HTML5') cur.cancelHtml5Mute();
     this._scheduledNextIndex = null;
   }
 
