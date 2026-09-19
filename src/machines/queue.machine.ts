@@ -33,7 +33,7 @@ export type QueueEvent =
   | { type: 'TOGGLE' }
   | { type: 'NEXT' }
   | { type: 'PREVIOUS' }
-  | { type: 'GOTO'; index: number; playImmediately?: boolean }
+  | { type: 'GOTO'; index: number; playImmediately?: boolean; startTime?: number }
   | { type: 'SEEK'; time: number }
   | { type: 'SET_VOLUME'; volume: number }
   | { type: 'ADD_TRACK' }
@@ -113,7 +113,7 @@ export function createQueueMachine(initialContext: QueueContext) {
       playCurrent: () => {},
       pauseCurrent: () => {},
       seekCurrent: () => {},
-      seekCurrentToZero: () => {},
+      seekCurrentToStartTime: () => {},
       scheduleGapless: () => {},
       cancelScheduledGapless: () => {},
       cancelAndRescheduleGapless: () => {},
@@ -163,7 +163,7 @@ export function createQueueMachine(initialContext: QueueContext) {
                 'deactivateCurrent',
                 'cancelAllGapless',
                 'gotoTrackIndex',
-                'seekCurrentToZero',
+                'seekCurrentToStartTime',
                 'preloadAhead',
               ],
             },
@@ -250,7 +250,7 @@ export function createQueueMachine(initialContext: QueueContext) {
                 'deactivateCurrent',
                 'cancelAllGapless',
                 'gotoTrackIndex',
-                'seekCurrentToZero',
+                'seekCurrentToStartTime',
                 'preloadAhead',
               ],
             },
@@ -364,7 +364,7 @@ export function createQueueMachine(initialContext: QueueContext) {
                 'deactivateCurrent',
                 'cancelAllGapless',
                 'gotoTrackIndex',
-                'seekCurrentToZero',
+                'seekCurrentToStartTime',
                 'preloadAhead',
               ],
             },
@@ -433,7 +433,7 @@ export function createQueueMachine(initialContext: QueueContext) {
                 'deactivateCurrent',
                 'cancelAllGapless',
                 'gotoTrackIndex',
-                'seekCurrentToZero',
+                'seekCurrentToStartTime',
                 'preloadAhead',
               ],
             },
