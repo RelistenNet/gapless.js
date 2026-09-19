@@ -637,7 +637,11 @@ export class Track {
   private _crossoverHtml5ToWebAudio(wasPlaying: boolean): void {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
 
-    const offset = this.audio.currentTime;
+    const htmlTime = this.audio.currentTime;
+    const offset =
+      isFinite(this.pausedAtTrackTime) && this.pausedAtTrackTime > htmlTime
+        ? this.pausedAtTrackTime
+        : htmlTime;
     this.pausedAtTrackTime = isFinite(offset) ? offset : 0;
 
     if (!wasPlaying) {
