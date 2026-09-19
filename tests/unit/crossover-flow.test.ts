@@ -164,7 +164,7 @@ describe('crossover end-to-end flow', () => {
     const startedSource = allSources.find(s => s.start.mock.calls.length > 0);
     expect(startedSource).toBeDefined();
     const [, offsetArg] = startedSource!.start.mock.calls[0];
-    // With the scheduling lead (≥50 ms at 1x rate), the source starts
+    // With the scheduling lead (≥20 ms at 1x rate), the source starts
     // slightly ahead of the captured audio.currentTime.
     expect(offsetArg).toBeCloseTo(4, 1);
     expect(offsetArg).toBeGreaterThanOrEqual(4);

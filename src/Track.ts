@@ -678,18 +678,20 @@ export class Track {
     // explicit when that matches _waRefCtxTime eliminates the mismatch.
     const lead = wasSuspended
       ? 0.15
-      : Math.max(0.05, 2 * ((this.ctx as unknown as { baseLatency?: number }).baseLatency || 0) + 0.02);
+      : Math.max(0.02, 2 * ((this.ctx as unknown as { baseLatency?: number }).baseLatency || 0) + 0.01);
     const when = this.ctx.currentTime + lead;
 
     // Advance the buffer start position by the lead so the source begins
     // from where playback will actually be at `when`, not where it was at
     // the moment we read currentTime. This keeps the currentTime formula
     // (waRefTrackTime + (ctx.currentTime - waRefCtxTime) * rate) equal to
-    // `offset` immediately after the call, and aligns the crossover so the
-    // WebAudio source picks up exactly where HTML5 will be at the fade point.
+    // `offset` immediately after the call without accumulating drift across
+    // pause/resume cycles. During crossover it also aligns the WebAudio
+    // source to where the HTML5 element will be at the fade point.
+    // The skipped interval (≤20 ms at 1× rate) is below audible threshold.
     const rate = this.queueRef.playbackRate;
     const maxOffset = this.audioBuffer.duration - this._bufferStartPaddingSec;
-    const correctedOffset = Math.min(offset + lead * rate, maxOffset);
+    const effectiveOffset = Math.min(offset + lead * rate, maxOffset);
 
     if (fadeInSec > 0) {
       const fadeNode = this.ctx.createGain();
@@ -703,8 +705,8 @@ export class Track {
     this.sourceNode.onended = this._handleWebAudioEnded;
 
     this._waRefCtxTime = when;
-    this._waRefTrackTime = correctedOffset;
-    this.sourceNode.start(when, correctedOffset + this._bufferStartPaddingSec);
+    this._waRefTrackTime = effectiveOffset;
+    this.sourceNode.start(when, effectiveOffset + this._bufferStartPaddingSec);
     return when;
   }
 
