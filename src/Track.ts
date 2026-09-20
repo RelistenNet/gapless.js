@@ -278,9 +278,10 @@ export class Track {
         startProgressLoop: () => this.startProgressLoop(),
         pauseHtml5: () => this.audio.pause(),
         freezePausedTime: assign({
-          seekTarget: () => {
+          seekTarget: ({ context }: { context: TrackContext }) => {
             const t = this.currentTime;
-            return isFinite(t) ? t : 0;
+            const current = isFinite(t) ? t : 0;
+            return Math.max(current, context.seekTarget);
           },
         }),
         stopSourceNode: () => this._stopSourceNode(),
