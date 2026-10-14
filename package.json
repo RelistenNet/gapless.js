@@ -37,17 +37,17 @@
   "author": "Daniel Saewitz",
   "license": "MIT",
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.64.0",
     "@switz/eslint-config": "^13.1.0",
-    "@vitest/coverage-v8": "^5.0.1",
-    "eslint": "^10.11.0",
-    "happy-dom": "^20.14.5",
-    "playwright": "^1.63.0",
+    "@vitest/coverage-v8": "^5.0.4",
+    "eslint": "^10.12.0",
+    "happy-dom": "^21.0.1",
+    "playwright": "^1.64.0",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.4"
   },
-  "packageManager": "pnpm@10.30.2",
+  "packageManager": "pnpm@12.11.2",
   "dependencies": {
     "xstate": "^5.33.2"
   }
