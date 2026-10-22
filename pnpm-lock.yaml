@@ -167,8 +167,8 @@ importers:
   .:
     dependencies:
       xstate:
-        specifier: ^5.33.2
-        version: 5.33.2
+        specifier: ^5.33.3
+        version: 5.33.3
     devDependencies:
       '@playwright/test':
         specifier: ^1.64.1
@@ -2496,8 +2496,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  xstate@5.33.2:
-    resolution: {integrity: sha512-8tC7yXgeCvpT8gKEeEje6ikJJG1wpnoLiXe+HfECW8m10ubMd3QxKOwWA8KxPJVBcLwfdRoMKYxIBGYKmo37/A==}
+  xstate@5.33.3:
+    resolution: {integrity: sha512-AnDRjS/GyKHmbA1PyhVCYBqYsA7EGe3KGgeD0ht3NFsXzoz7leX/HQDFX9QlHFJ/ltLHPsgChJYwPzRvB/0b4g==}
 
   yaml@2.9.0:
     resolution: {integrity: sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==}
@@ -4069,7 +4069,7 @@ snapshots:
 
   ws@8.21.3: {}
 
-  xstate@5.33.2: {}
+  xstate@5.33.3: {}
 
   yaml@2.9.0:
     optional: true

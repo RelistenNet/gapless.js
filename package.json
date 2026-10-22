@@ -40,7 +40,7 @@
     "fmt:check": "oxfmt -c oxfmt.config.mjs --check ."
   },
   "dependencies": {
-    "xstate": "^5.33.2"
+    "xstate": "^5.33.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
