@@ -18,8 +18,16 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata = {
+  // Makes the auto-linked og:image absolute, which link unfurlers require.
+  metadataBase: new URL('https://gapless.saewitz.com'),
   title: 'gapless.js',
   description: 'Gapless audio playback for the web.',
+  openGraph: {
+    title: 'gapless.js',
+    description: 'Gapless audio playback for the web.',
+    type: 'website',
+  },
+  twitter: { card: 'summary_large_image' },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
