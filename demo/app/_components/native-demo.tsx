@@ -79,21 +79,6 @@ class NativeStore {
     this.els = els;
     const [a, b] = els;
 
-    const ctx = new AudioContext();
-    this.ctx = ctx;
-    const url = URL.createObjectURL(new Blob([GAP_METER], { type: 'text/javascript' }));
-    ctx.audioWorklet.addModule(url).then(() => {
-      if (ctx.state === 'closed') return;
-      const meter = new AudioWorkletNode(ctx, 'gap-meter', { outputChannelCount: [2] });
-      meter.port.onmessage = (e: MessageEvent<number>) => {
-        if (!this.measuring) return;
-        this.measuring = false;
-        this.set({ gapMs: Math.round(e.data * 1000) });
-      };
-      for (const el of els) ctx.createMediaElementSource(el).connect(meter);
-      meter.connect(ctx.destination);
-    });
-
     const onEnded = () => {
       this.measuring = true;
       this.index = 1;
@@ -134,9 +119,36 @@ class NativeStore {
         el.removeAttribute('src');
         el.load();
       }
-      ctx.close();
-      URL.revokeObjectURL(url);
+      this.ctx?.close();
+      this.ctx = null;
     };
+  }
+
+  /**
+   * Create the AudioContext and route both elements through the gap meter.
+   * Deferred to the first play or seek, so the page doesn't start a context
+   * (and trip Chrome's autoplay warning) before anyone interacts with it.
+   */
+  private startAudio() {
+    if (this.ctx) return void this.ctx.resume();
+    const ctx = new AudioContext();
+    this.ctx = ctx;
+    const els = this.els;
+    const url = URL.createObjectURL(new Blob([GAP_METER], { type: 'text/javascript' }));
+    ctx.audioWorklet
+      .addModule(url)
+      .then(() => {
+        if (ctx.state === 'closed') return;
+        const meter = new AudioWorkletNode(ctx, 'gap-meter', { outputChannelCount: [2] });
+        meter.port.onmessage = (e: MessageEvent<number>) => {
+          if (!this.measuring) return;
+          this.measuring = false;
+          this.set({ gapMs: Math.round(e.data * 1000) });
+        };
+        for (const el of els) ctx.createMediaElementSource(el).connect(meter);
+        meter.connect(ctx.destination);
+      })
+      .finally(() => URL.revokeObjectURL(url));
   }
 
   private loop = () => {
@@ -162,7 +174,7 @@ class NativeStore {
   seek = (seconds: number) => {
     if (!this.els.length) return;
     claimPlayback('native');
-    this.ctx?.resume();
+    this.startAudio();
     const index = Math.min(this.els.length - 1, Math.floor(seconds / CLIP_SECONDS));
     this.pause();
     this.index = index;
@@ -179,7 +191,7 @@ class NativeStore {
     if (this.snapshot.playing) return this.pause();
     if (el.ended) return this.seek(0);
     claimPlayback('native');
-    this.ctx?.resume();
+    this.startAudio();
     el.play();
   };
 }
