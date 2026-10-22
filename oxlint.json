@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "extends": [
+    "./node_modules/@switz/lint-config/oxlint.json",
+    "./node_modules/@switz/lint-config/oxlint.react.json"
+  ],
+  "ignorePatterns": ["dist", "demo/.timber", "src/gapless.js"],
+  "overrides": [
+    {
+      "files": ["tests/**"],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        "typescript/no-non-null-assertion": "off",
+        "unicorn/no-useless-spread": "off"
+      }
+    }
+  ]
+}

@@ -1,16 +1,24 @@
 {
   "name": "gapless",
   "version": "4.4.3",
+  "private": false,
   "description": "Gapless audio playback javascript plugin",
-  "type": "module",
-  "main": "dist/index.mjs",
-  "module": "dist/index.mjs",
-  "types": "dist/index.d.ts",
+  "license": "MIT",
+  "author": "Daniel Saewitz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RelistenNet/gapless.js.git"
+  },
   "files": [
     "dist",
     "src",
     "README.md"
   ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "dist/index.mjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
   "exports": {
     "./package.json": "./package.json",
     ".": {
@@ -18,8 +26,6 @@
       "default": "./dist/index.mjs"
     }
   },
-  "sideEffects": false,
-  "private": false,
   "scripts": {
     "test": "vitest run",
     "build": "tsup && tsc -p tsconfig.build.json",
@@ -28,27 +34,25 @@
     "types": "tsc --noEmit",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "prepublishOnly": "pnpm run build"
+    "prepublishOnly": "pnpm run build",
+    "lint": "oxlint -c oxlint.json",
+    "fmt": "oxfmt -c oxfmt.config.mjs .",
+    "fmt:check": "oxfmt -c oxfmt.config.mjs --check ."
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/RelistenNet/gapless.js.git"
+  "dependencies": {
+    "xstate": "^5.33.2"
   },
-  "author": "Daniel Saewitz",
-  "license": "MIT",
   "devDependencies": {
     "@playwright/test": "^1.64.0",
-    "@switz/eslint-config": "^13.1.0",
+    "@switz/lint-config": "^14.0.0",
     "@vitest/coverage-v8": "^5.0.4",
-    "eslint": "^10.12.0",
     "happy-dom": "^21.0.1",
+    "oxfmt": "^0.73.0",
+    "oxlint": "^1.88.0",
     "playwright": "^1.64.0",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.4"
   },
-  "packageManager": "pnpm@12.11.2",
-  "dependencies": {
-    "xstate": "^5.33.2"
-  }
+  "packageManager": "pnpm@12.11.2"
 }

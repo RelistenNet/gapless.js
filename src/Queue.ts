@@ -14,7 +14,13 @@ import { createQueueMachine } from './machines/queue.machine';
 import { Track } from './Track';
 import type { TrackQueueRef } from './Track';
 import { throttle } from './utils/throttle';
-import type { GaplessOptions, AddTrackOptions, TrackInfo, TrackMetadata, PlaybackMethod } from './types';
+import type {
+  GaplessOptions,
+  AddTrackOptions,
+  TrackInfo,
+  TrackMetadata,
+  PlaybackMethod,
+} from './types';
 
 const MAX_SCHEDULE_LOOKAHEAD = 5;
 
@@ -40,13 +46,13 @@ function getSilentWavUrl(): string {
   view.setUint32(4, fileSize - 8, true);
   writeStr(8, 'WAVE');
   writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);       // fmt chunk size
-  view.setUint16(20, 1, true);        // PCM
-  view.setUint16(22, 1, true);        // mono
+  view.setUint32(16, 16, true); // fmt chunk size
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate, true); // byte rate
-  view.setUint16(32, 1, true);        // block align
-  view.setUint16(34, 8, true);        // 8 bits per sample
+  view.setUint16(32, 1, true); // block align
+  view.setUint16(34, 8, true); // 8 bits per sample
   writeStr(36, 'data');
   view.setUint32(40, numSamples, true);
   new Uint8Array(buffer, 44).fill(128); // 8-bit PCM silence = 128
@@ -83,7 +89,7 @@ export class Queue implements TrackQueueRef {
   private _throttledUpdatePositionState = throttle(
     (duration: number, currentTime: number, playbackRate: number) =>
       updateMediaSessionPositionState(duration, currentTime, playbackRate),
-    1000,
+    1000
   );
 
   constructor(options: GaplessOptions = {}) {
@@ -137,7 +143,7 @@ export class Queue implements TrackQueueRef {
     // -----------------------------------------------------------------------
     const machine = createQueueMachine({
       currentTrackIndex: 0,
-      trackCount: this._tracks.length
+      trackCount: this._tracks.length,
     }).provide({
       actions: {
         deactivateCurrent: ({ context }) => {
@@ -212,8 +218,13 @@ export class Queue implements TrackQueueRef {
 
     this._actor = createActor(machine);
 
+    let wasPlaying = false;
     this._actor.subscribe((snapshot) => {
       const playing = snapshot.value === 'playing';
+      // Media Session handlers are page-global. With several queues on one
+      // page, the one that starts playing takes over the OS controls.
+      if (playing && !wasPlaying) this._claimMediaSession();
+      wasPlaying = playing;
       updateMediaSessionPlaybackState(playing);
       if (playing) {
         this._startMediaSessionAnchor();
@@ -224,15 +235,24 @@ export class Queue implements TrackQueueRef {
 
     this._actor.start();
 
-    setupMediaSession({
-      onPlay: () => this.play(),
-      onPause: () => {
-        if (this._actor.getSnapshot().value === 'playing') this.pause();
-      },
-      onNext: () => this.next(),
-      onPrevious: () => this.previous(),
-      onSeek: (t) => this.seek(t),
-    });
+    setupMediaSession(this._mediaSessionHandlers);
+  }
+
+  private readonly _mediaSessionHandlers = {
+    onPlay: () => this.play(),
+    onPause: () => {
+      if (this._actor.getSnapshot().value === 'playing') this.pause();
+    },
+    onNext: () => this.next(),
+    onPrevious: () => this.previous(),
+    onSeek: (t: number) => this.seek(t),
+  };
+
+  /** Point the OS media controls and metadata at this queue. */
+  private _claimMediaSession(): void {
+    setupMediaSession(this._mediaSessionHandlers);
+    const cur = this._currentTrack;
+    if (cur) updateMediaSessionMetadata(cur.metadata);
   }
 
   // --------------------------------------------------------------------------
@@ -390,7 +410,10 @@ export class Queue implements TrackQueueRef {
   }
 
   /** Snapshot of the queue state machine (state name + context). For debugging. */
-  get queueSnapshot(): { state: string; context: { currentTrackIndex: number; trackCount: number } } {
+  get queueSnapshot(): {
+    state: string;
+    context: { currentTrackIndex: number; trackCount: number };
+  } {
     const snap = this._actor.getSnapshot();
     return { state: snap.value as string, context: snap.context };
   }
@@ -483,7 +506,9 @@ export class Queue implements TrackQueueRef {
       cur.playbackType === 'HTML5' &&
       cur.webAudioLoadingState === 'LOADING'
     ) {
-      this.onDebug(`_preloadAhead(${fromIndex}): deferring all — current track buffer still loading`);
+      this.onDebug(
+        `_preloadAhead(${fromIndex}): deferring all — current track buffer still loading`
+      );
       return;
     }
 
@@ -495,17 +520,18 @@ export class Queue implements TrackQueueRef {
     const curBelowThreshold =
       cur != null &&
       cur.isPlaying &&
-      (() => {
-        const threshold = isNaN(cur.duration) ? 15 : Math.min(cur.duration * 0.2, 15);
-        return cur.currentTime < threshold;
-      })();
+      cur.currentTime < (isNaN(cur.duration) ? 15 : Math.min(cur.duration * 0.2, 15));
 
     const limit = fromIndex + this._preloadNumTracks + 1;
-    this.onDebug(`_preloadAhead(${fromIndex}) limit=${limit} trackCount=${this._tracks.length} belowThreshold=${curBelowThreshold}`);
+    this.onDebug(
+      `_preloadAhead(${fromIndex}) limit=${limit} trackCount=${this._tracks.length} belowThreshold=${curBelowThreshold}`
+    );
     for (let i = fromIndex + 1; i < this._tracks.length && i < limit; i++) {
       const t = this._tracks[i];
       if (i > fromIndex + 1 && curBelowThreshold) {
-        this.onDebug(`_preloadAhead: deferring track ${i} (current at ${cur!.currentTime.toFixed(1)}s, below threshold)`);
+        this.onDebug(
+          `_preloadAhead: deferring track ${i} (current at ${cur.currentTime.toFixed(1)}s, below threshold)`
+        );
         return;
       }
       if (!t.isBufferLoaded) {

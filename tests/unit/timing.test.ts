@@ -48,7 +48,8 @@ describe('Track currentTime', () => {
   });
 
   it('returns frozen time when paused on WebAudio', async () => {
-    const ctx = (globalThis as unknown as { _mockAudioContext: MockAudioContext })._mockAudioContext;
+    const ctx = (globalThis as unknown as { _mockAudioContext: MockAudioContext })
+      ._mockAudioContext;
     const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
 
     // Inject a mock buffer directly to skip the fetch pipeline
@@ -138,7 +139,11 @@ describe('Track currentTime', () => {
   });
 
   it('reflects playbackRate after pause/resume', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue({ playbackRate: 1.5 }) });
+    const t = new Track({
+      trackUrl: 'test.mp3',
+      index: 0,
+      queue: makeQueue({ playbackRate: 1.5 }),
+    });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
     t.play();
     advanceTime(10); // 10 wall-clock seconds at 1.5x = 15 track seconds
@@ -327,14 +332,18 @@ describe('Track mid-stream HTML5 → Web Audio crossover', () => {
     (t as unknown as { _actor: { send: (e: { type: string }) => void } })._actor.send({
       type: 'LOOKAHEAD_REACHED',
     });
-    const preSnap = (t as unknown as { _actor: { getSnapshot: () => { context: { notifiedLookahead: boolean } } } })._actor.getSnapshot();
+    const preSnap = (
+      t as unknown as { _actor: { getSnapshot: () => { context: { notifiedLookahead: boolean } } } }
+    )._actor.getSnapshot();
     expect(preSnap.context.notifiedLookahead).toBe(true);
 
     // Buffer arrives → crossover
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
     sendBufferReady(t);
 
-    const postSnap = (t as unknown as { _actor: { getSnapshot: () => { context: { notifiedLookahead: boolean } } } })._actor.getSnapshot();
+    const postSnap = (
+      t as unknown as { _actor: { getSnapshot: () => { context: { notifiedLookahead: boolean } } } }
+    )._actor.getSnapshot();
     expect(postSnap.context.notifiedLookahead).toBe(false);
   });
 });
@@ -359,9 +368,9 @@ describe('Track scheduleGaplessStart', () => {
     const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
-    advanceTime(10);            // ctx.currentTime = 10
+    advanceTime(10); // ctx.currentTime = 10
     t.scheduleGaplessStart(10); // _waRefCtxTime = 10, _waRefTrackTime = 0
-    advanceTime(5);             // ctx.currentTime = 15
+    advanceTime(5); // ctx.currentTime = 15
 
     // currentTime = 0 + (15 - 10) * 1 = 5
     expect(t.currentTime).toBeCloseTo(5, 1);
@@ -426,7 +435,7 @@ describe('Track scheduleGaplessStart', () => {
     t.startProgressLoop();
 
     // RAF is mocked to run via setTimeout(cb, 0)
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(onProgress).toHaveBeenCalled();
     const info = onProgress.mock.calls[0][0];

@@ -73,14 +73,11 @@ export function createQueueMachine(initialContext: QueueContext) {
             return Math.max(0, context.currentTrackIndex - 1);
           }
           // Clamp to last valid index when removing at or after current
-          return newCount > 0
-            ? Math.min(context.currentTrackIndex, newCount - 1)
-            : 0;
+          return newCount > 0 ? Math.min(context.currentTrackIndex, newCount - 1) : 0;
         },
       }),
       gotoTrackIndex: assign({
-        currentTrackIndex: ({ event }) =>
-          (event as { type: 'GOTO'; index: number }).index,
+        currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
       }),
       advanceToNextTrack: assign({
         currentTrackIndex: ({ context }) => {
@@ -141,7 +138,12 @@ export function createQueueMachine(initialContext: QueueContext) {
         on: {
           PLAY: {
             target: 'playing',
-            actions: ['playCurrent', 'updateMediaSessionMetadata', 'preloadAhead', 'scheduleGapless'],
+            actions: [
+              'playCurrent',
+              'updateMediaSessionMetadata',
+              'preloadAhead',
+              'scheduleGapless',
+            ],
           },
           GOTO: [
             {
@@ -193,7 +195,7 @@ export function createQueueMachine(initialContext: QueueContext) {
                 'cancelAllGapless',
                 'decrementTrackCount',
                 'activateCurrent',
-              'playCurrent',
+                'playCurrent',
                 'notifyStartNewTrack',
                 'updateMediaSessionMetadata',
                 'preloadAhead',
@@ -322,11 +324,21 @@ export function createQueueMachine(initialContext: QueueContext) {
           ],
           PLAY: {
             target: 'playing',
-            actions: ['playCurrent', 'updateMediaSessionMetadata', 'preloadAhead', 'scheduleGapless'],
+            actions: [
+              'playCurrent',
+              'updateMediaSessionMetadata',
+              'preloadAhead',
+              'scheduleGapless',
+            ],
           },
           TOGGLE: {
             target: 'playing',
-            actions: ['playCurrent', 'updateMediaSessionMetadata', 'preloadAhead', 'scheduleGapless'],
+            actions: [
+              'playCurrent',
+              'updateMediaSessionMetadata',
+              'preloadAhead',
+              'scheduleGapless',
+            ],
           },
           NEXT: {
             actions: [

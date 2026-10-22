@@ -60,8 +60,8 @@ import type {
   AddTrackOptions,
   TrackInfo,
   TrackMetadata,
-  PlaybackType,       // 'HTML5' | 'WEBAUDIO'
-  WebAudioLoadingState // 'NONE' | 'LOADING' | 'LOADED' | 'ERROR'
+  PlaybackType, // 'HTML5' | 'WEBAUDIO'
+  WebAudioLoadingState, // 'NONE' | 'LOADING' | 'LOADED' | 'ERROR'
 } from 'gapless';
 ```
 
@@ -78,44 +78,44 @@ const queue = new Queue({
   webAudioIsDisabled: false,
 
   // Callbacks
-  onProgress:          (info: TrackInfo) => {},  // ~60 fps while playing
-  onStartNewTrack:     (info: TrackInfo) => {},  // any new track becomes current
-  onPlayNextTrack:     (info: TrackInfo) => {},  // advanced forward
-  onPlayPreviousTrack: (info: TrackInfo) => {},  // went backward
-  onEnded:             () => {},                 // last track finished
-  onError:             (error: Error) => {},     // playback error
-  onPlayBlocked:       () => {},                 // browser blocked autoplay
-  onDebug:             (msg: string) => {},      // internal debug messages
+  onProgress: (info: TrackInfo) => {}, // ~60 fps while playing
+  onStartNewTrack: (info: TrackInfo) => {}, // any new track becomes current
+  onPlayNextTrack: (info: TrackInfo) => {}, // advanced forward
+  onPlayPreviousTrack: (info: TrackInfo) => {}, // went backward
+  onEnded: () => {}, // last track finished
+  onError: (error: Error) => {}, // playback error
+  onPlayBlocked: () => {}, // browser blocked autoplay
+  onDebug: (msg: string) => {}, // internal debug messages
 });
 ```
 
 ### Methods
 
-| Method | Description |
-|---|---|
-| `play()` | Start or resume playback of the current track. |
-| `pause()` | Pause the current track. |
-| `togglePlayPause()` | Toggle between play and pause. |
-| `next()` | Advance to the next track. No-op on the last track. |
-| `previous()` | Go to previous track, or restart current if > 8 s in. |
-| `gotoTrack(index, playImmediately?)` | Jump to a specific track by index. |
-| `seek(time)` | Seek to a position in seconds. |
-| `setVolume(volume)` | Set volume (0.0–1.0, clamped). |
-| `addTrack(url, options?)` | Append a track to the queue. |
-| `removeTrack(index)` | Remove a track by index (reindexes remaining). |
-| `resumeAudioContext()` | Create + resume the AudioContext. **Must be called from a user gesture.** |
-| `destroy()` | Stop playback and release all resources. |
+| Method                               | Description                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| `play()`                             | Start or resume playback of the current track.                            |
+| `pause()`                            | Pause the current track.                                                  |
+| `togglePlayPause()`                  | Toggle between play and pause.                                            |
+| `next()`                             | Advance to the next track. No-op on the last track.                       |
+| `previous()`                         | Go to previous track, or restart current if > 8 s in.                     |
+| `gotoTrack(index, playImmediately?)` | Jump to a specific track by index.                                        |
+| `seek(time)`                         | Seek to a position in seconds.                                            |
+| `setVolume(volume)`                  | Set volume (0.0–1.0, clamped).                                            |
+| `addTrack(url, options?)`            | Append a track to the queue.                                              |
+| `removeTrack(index)`                 | Remove a track by index (reindexes remaining).                            |
+| `resumeAudioContext()`               | Create + resume the AudioContext. **Must be called from a user gesture.** |
+| `destroy()`                          | Stop playback and release all resources.                                  |
 
 ### Getters
 
-| Getter | Type | Description |
-|---|---|---|
-| `currentTrack` | `TrackInfo \| undefined` | Snapshot of the current track. |
-| `currentTrackIndex` | `number` | Zero-based index of the current track. |
-| `tracks` | `readonly TrackInfo[]` | Snapshot array of all tracks. |
-| `isPlaying` | `boolean` | Queue is in playing state. |
-| `isPaused` | `boolean` | Queue is in paused state. |
-| `volume` | `number` | Current volume (0.0–1.0). |
+| Getter              | Type                     | Description                            |
+| ------------------- | ------------------------ | -------------------------------------- |
+| `currentTrack`      | `TrackInfo \| undefined` | Snapshot of the current track.         |
+| `currentTrackIndex` | `number`                 | Zero-based index of the current track. |
+| `tracks`            | `readonly TrackInfo[]`   | Snapshot array of all tracks.          |
+| `isPlaying`         | `boolean`                | Queue is in playing state.             |
+| `isPaused`          | `boolean`                | Queue is in paused state.              |
+| `volume`            | `number`                 | Current volume (0.0–1.0).              |
 
 ### TrackInfo
 
@@ -125,7 +125,7 @@ All callbacks and getters return `TrackInfo` — a plain data snapshot with no m
 interface TrackInfo {
   index: number;
   currentTime: number;
-  duration: number;          // NaN until metadata loaded
+  duration: number; // NaN until metadata loaded
   isPlaying: boolean;
   isPaused: boolean;
   volume: number;
@@ -143,7 +143,7 @@ interface TrackMetadata {
   title?: string;
   artist?: string;
   album?: string;
-  artwork?: MediaImage[];  // for Media Session API
+  artwork?: MediaImage[]; // for Media Session API
   [key: string]: unknown;
 }
 ```
@@ -190,28 +190,35 @@ export function useGapless(tracks: string[], metadata: { title: string }[]) {
       q.destroy();
       queueRef.current = null;
     };
-  }, []);  // stable — create once
+  }, []); // stable — create once
 
   // Wrap user-gesture actions to ensure AudioContext is alive
   const withCtx = useCallback((fn: () => void) => {
     const q = queueRef.current;
     if (!q) return;
-    if (ctxReady.current) { fn(); return; }
+    if (ctxReady.current) {
+      fn();
+      return;
+    }
     q.resumeAudioContext().then(() => {
       ctxReady.current = true;
       fn();
     });
   }, []);
 
-  const play    = useCallback(() => withCtx(() => queueRef.current?.play()), [withCtx]);
-  const pause   = useCallback(() => queueRef.current?.pause(), []);
-  const toggle  = useCallback(() => withCtx(() => queueRef.current?.togglePlayPause()), [withCtx]);
-  const next    = useCallback(() => withCtx(() => queueRef.current?.next()), [withCtx]);
-  const prev    = useCallback(() => withCtx(() => queueRef.current?.previous()), [withCtx]);
-  const seek    = useCallback((t: number) => queueRef.current?.seek(t), []);
-  const goto    = useCallback((i: number) => withCtx(() => {
-    queueRef.current?.gotoTrack(i, true);
-  }), [withCtx]);
+  const play = useCallback(() => withCtx(() => queueRef.current?.play()), [withCtx]);
+  const pause = useCallback(() => queueRef.current?.pause(), []);
+  const toggle = useCallback(() => withCtx(() => queueRef.current?.togglePlayPause()), [withCtx]);
+  const next = useCallback(() => withCtx(() => queueRef.current?.next()), [withCtx]);
+  const prev = useCallback(() => withCtx(() => queueRef.current?.previous()), [withCtx]);
+  const seek = useCallback((t: number) => queueRef.current?.seek(t), []);
+  const goto = useCallback(
+    (i: number) =>
+      withCtx(() => {
+        queueRef.current?.gotoTrack(i, true);
+      }),
+    [withCtx]
+  );
 
   return { state, currentTrack, tracks: allTracks, play, pause, toggle, next, prev, seek, goto };
 }
@@ -274,12 +281,12 @@ Each Track has its own machine managing its playback backend and loading state.
 
 **States:**
 
-| State | Meaning |
-|---|---|
-| `idle` | Constructed, not active. |
-| `html5` | HTML5 `<audio>` element is the active output. WebAudio decode may be running in parallel. |
-| `loading` | Track is preloading in the background (not currently playing). |
-| `webaudio` | An `AudioBufferSourceNode` is the active output. |
+| State      | Meaning                                                                                   |
+| ---------- | ----------------------------------------------------------------------------------------- |
+| `idle`     | Constructed, not active.                                                                  |
+| `html5`    | HTML5 `<audio>` element is the active output. WebAudio decode may be running in parallel. |
+| `loading`  | Track is preloading in the background (not currently playing).                            |
+| `webaudio` | An `AudioBufferSourceNode` is the active output.                                          |
 
 **Key transitions:**
 
@@ -303,21 +310,21 @@ Child actor spawned by TrackMachine when `START_FETCH` fires. Manages the async 
 
 **States:**
 
-| State | Meaning |
-|---|---|
+| State          | Meaning                                                           |
+| -------------- | ----------------------------------------------------------------- |
 | `resolvingUrl` | HEAD request to resolve redirects. Skipped if `skipHEAD` is true. |
-| `fetching` | GET request for the audio data. |
-| `decoding` | `AudioContext.decodeAudioData()` on the ArrayBuffer. |
-| `done` | Buffer decoded successfully (final). |
-| `error` | Fetch or decode failed (final). |
+| `fetching`     | GET request for the audio data.                                   |
+| `decoding`     | `AudioContext.decodeAudioData()` on the ArrayBuffer.              |
+| `done`         | Buffer decoded successfully (final).                              |
+| `error`        | Fetch or decode failed (final).                                   |
 
 **Parent communication via `sendParent`:**
 
-| Event | When |
-|---|---|
-| `URL_RESOLVED` | HEAD request resolved a redirect URL. |
+| Event          | When                                        |
+| -------------- | ------------------------------------------- |
+| `URL_RESOLVED` | HEAD request resolved a redirect URL.       |
 | `BUFFER_READY` | Decode succeeded — PCM buffer is available. |
-| `BUFFER_ERROR` | Fetch or decode failed. |
+| `BUFFER_ERROR` | Fetch or decode failed.                     |
 
 xstate v5 automatically passes an `AbortSignal` to `fromPromise` actors, so when the parent stops (e.g., `destroy()`), in-flight fetches are aborted for free.
 
@@ -402,11 +409,13 @@ The Queue automatically integrates with the [Media Session API](https://develope
 ### Pause/Resume on WebAudio Path
 
 `AudioBufferSourceNode` is one-shot — it cannot be paused and restarted. On pause:
+
 - Record `pausedAtTrackTime = currentTime`
 - `sourceNode.stop()` + `disconnect()`
 - Set `_webAudioPaused = true`
 
 On resume:
+
 - Create a fresh `AudioBufferSourceNode`
 - `sourceNode.start(0, pausedAtTrackTime)`
 - `webAudioStartedAt = ctx.currentTime - pausedAtTrackTime`
@@ -459,11 +468,11 @@ pnpm dev            # node dev-server.mjs → http://localhost:8765
 
 Serves three things on port 8765:
 
-| Path | Purpose |
-|---|---|
-| `/` | Static files from project root (`index.html` + `dist/`) |
+| Path                   | Purpose                                                                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `/`                    | Static files from project root (`index.html` + `dist/`)                                                                       |
 | `/proxy?url=<encoded>` | CORS proxy — required for `fetch()` + `decodeAudioData` on cross-origin audio (e.g. `audio.relisten.net` has no CORS headers) |
-| `/esr` | SSE hot-reload — browser reloads when `dist/*.mjs` or `index.html` changes |
+| `/esr`                 | SSE hot-reload — browser reloads when `dist/*.mjs` or `index.html` changes                                                    |
 
 Workflow: `pnpm dev` (server) in one terminal, `pnpm build` (or `pnpm build --watch`) in another. The browser reloads automatically after each build.
 
@@ -530,11 +539,12 @@ All bugs below were discovered during the v3→v4 development and are covered by
 
 ### 4. `AudioContext` created before user gesture
 
-**Symptom:** Browser console warning: *"An AudioContext was prevented from starting automatically. It must be created or resumed after a user gesture on the page."*
+**Symptom:** Browser console warning: _"An AudioContext was prevented from starting automatically. It must be created or resumed after a user gesture on the page."_
 
 **Root cause:** `getAudioContext()` called `new AudioContext()` lazily on first access. This happened at `Queue` construction time (via `Track` constructors), before any user gesture.
 
 **Fix:** Split responsibilities:
+
 - `getAudioContext()` returns `null` if `resumeAudioContext()` has never been called (no `new AudioContext()`)
 - `resumeAudioContext()` creates the context on first call (must be from a user gesture), then resumes it if suspended
 - `Track.ctx` is a lazy getter — checks `getAudioContext()` each time and creates the `GainNode` on first non-null access
