@@ -99,7 +99,7 @@ describe('preloadNumTracks', () => {
     // Manually call the internal preload ahead
     (q as unknown as { _preloadAhead: (i: number) => void })._preloadAhead(0);
     // Only track 1 should be considered (limit = 0 + 1 + 1 = 2, so only index 1)
-    const debugCalls = onDebug.mock.calls.map(c => c[0]);
+    const debugCalls = onDebug.mock.calls.map((c) => c[0]);
     const preloadCalls = debugCalls.filter((m: string) => m.includes('_preloadAhead'));
     expect(preloadCalls.length).toBeGreaterThan(0);
   });
@@ -310,7 +310,9 @@ describe('playbackRate', () => {
     injectBuffer(q, 0);
     q.play();
     const tracks = (q as unknown as { _tracks: Track[] })._tracks;
-    const track0 = tracks[0] as unknown as { sourceNode: { playbackRate: { value: number } } | null };
+    const track0 = tracks[0] as unknown as {
+      sourceNode: { playbackRate: { value: number } } | null;
+    };
     expect(track0.sourceNode).not.toBeNull();
     expect(track0.sourceNode!.playbackRate.value).toBe(1.5);
   });
@@ -321,7 +323,9 @@ describe('playbackRate', () => {
     q.play();
     q.setPlaybackRate(2);
     const tracks = (q as unknown as { _tracks: Track[] })._tracks;
-    const track0 = tracks[0] as unknown as { sourceNode: { playbackRate: { value: number } } | null };
+    const track0 = tracks[0] as unknown as {
+      sourceNode: { playbackRate: { value: number } } | null;
+    };
     expect(track0.sourceNode!.playbackRate.value).toBe(2);
   });
 
@@ -347,7 +351,8 @@ describe('playbackRate', () => {
     t.audioBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
     t.play();
     t.setPlaybackRate(2);
-    const sourceNode = (t as unknown as { sourceNode: { playbackRate: { value: number } } | null }).sourceNode;
+    const sourceNode = (t as unknown as { sourceNode: { playbackRate: { value: number } } | null })
+      .sourceNode;
     expect(sourceNode!.playbackRate.value).toBe(2);
     expect((t.audio as unknown as { playbackRate: number }).playbackRate).toBe(2);
   });
@@ -362,7 +367,9 @@ describe('playbackRate', () => {
     // Schedule gapless for track 1
     advanceTime(10);
     tracks[1].scheduleGaplessStart(10);
-    const sourceNode1 = (tracks[1] as unknown as { sourceNode: { playbackRate: { value: number } } | null }).sourceNode;
+    const sourceNode1 = (
+      tracks[1] as unknown as { sourceNode: { playbackRate: { value: number } } | null }
+    ).sourceNode;
     expect(sourceNode1).not.toBeNull();
     expect(sourceNode1!.playbackRate.value).toBe(1.5);
   });
@@ -376,7 +383,8 @@ describe('playbackRate', () => {
 
       // At 1x: remaining = 100 - 0 = 100s, endTime = ctx.currentTime + 100
       // At 2x: remaining = (100 - 0) / 2 = 50s, endTime = ctx.currentTime + 50
-      const computeEndTime = (q as unknown as { _computeTrackEndTime: (t: Track) => number | null })._computeTrackEndTime;
+      const computeEndTime = (q as unknown as { _computeTrackEndTime: (t: Track) => number | null })
+        ._computeTrackEndTime;
       const tracks = (q as unknown as { _tracks: Track[] })._tracks;
       const endTime = computeEndTime.call(q, tracks[0]);
       // ctx.currentTime is 0, so endTime should be 50
@@ -393,7 +401,8 @@ describe('playbackRate', () => {
       // Schedule track 0 to start at ctx time 5
       tracks[0].scheduleGaplessStart(5);
 
-      const computeEndTime = (q as unknown as { _computeTrackEndTime: (t: Track) => number | null })._computeTrackEndTime;
+      const computeEndTime = (q as unknown as { _computeTrackEndTime: (t: Track) => number | null })
+        ._computeTrackEndTime;
       const endTime = computeEndTime.call(q, tracks[0]);
       // scheduledStartContextTime=5, duration=100, rate=2 → 5 + 100/2 = 55
       expect(endTime).toBeCloseTo(55, 1);
@@ -412,12 +421,13 @@ describe('playbackRate', () => {
 
       advanceTime(5);
       tracks[0].scheduleGaplessStart(5); // gapless start at ctx=5, dur=100
-      advanceTime(25);                   // position 25 @ ctx 30
+      advanceTime(25); // position 25 @ ctx 30
       tracks[0].pause();
-      advanceTime(40);                   // paused for 40s → ctx 70
-      tracks[0].play();                  // resume from 25 @ ctx 70
+      advanceTime(40); // paused for 40s → ctx 70
+      tracks[0].play(); // resume from 25 @ ctx 70
 
-      const computeEndTime = (q as unknown as { _computeTrackEndTime: (t: Track) => number | null })._computeTrackEndTime;
+      const computeEndTime = (q as unknown as { _computeTrackEndTime: (t: Track) => number | null })
+        ._computeTrackEndTime;
       const endTime = computeEndTime.call(q, tracks[0]);
       // Correct: 70 + (100 - 25) = 145. The stale scheduled-start math gave
       // 5 + 100 = 105 — i.e. the next track started 40s (the pause duration)

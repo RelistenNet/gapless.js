@@ -2,7 +2,7 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function throttle<T extends (...args: any[]) => void>(
   fn: T,
-  ms: number,
+  ms: number
 ): (...args: Parameters<T>) => void {
   let last = 0;
   return (...args: Parameters<T>) => {

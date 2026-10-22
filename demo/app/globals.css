@@ -1,0 +1,29 @@
+@import 'tailwindcss';
+
+/* --font-inter and --font-jetbrains-mono come from timber's self-hosted
+   fonts in layout.tsx. */
+@theme inline {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans--font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01', 'ss03';
+}
+
+@layer base {
+  a {
+    text-decoration-line: underline;
+    text-underline-offset: 4px;
+  }
+}
+
+/* sugar-high token colors. Code blocks are dark in both themes. */
+.sh {
+  --sh-class: #7dd3fc;
+  --sh-identifier: #e4e4e7;
+  --sh-sign: #a1a1aa;
+  --sh-property: #93c5fd;
+  --sh-entity: #6ee7b7;
+  --sh-jsxliterals: #e4e4e7;
+  --sh-string: #fcd34d;
+  --sh-keyword: #f9a8d4;
+  --sh-comment: #71717a;
+}

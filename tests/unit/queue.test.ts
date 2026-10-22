@@ -8,7 +8,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Queue } from '../../src/Queue';
 import type { TrackInfo } from '../../src/types';
-import { MockAudioBuffer, MockAudioContext, MockAudioElement, advanceTime, mockFetchSuccess, mockFetchFailure } from '../setup';
+import {
+  MockAudioBuffer,
+  MockAudioContext,
+  MockAudioElement,
+  advanceTime,
+  mockFetchSuccess,
+  mockFetchFailure,
+} from '../setup';
 import { _resetAudioContext } from '../../src/utils/audioContext';
 
 // Helper: inject a pre-decoded buffer into a track (bypasses fetch pipeline)
@@ -114,7 +121,10 @@ describe('Queue navigation', () => {
     injectBuffer(q, 1, 180);
     q.gotoTrack(1, true); // activates track 1 — buffer ready → plays via WebAudio
     // Simulate being 30 seconds in by seeking
-    const tracks = (q as unknown as { _tracks: unknown[] })._tracks as Array<{ seek: (t: number) => void; currentTime: number }>;
+    const tracks = (q as unknown as { _tracks: unknown[] })._tracks as Array<{
+      seek: (t: number) => void;
+      currentTime: number;
+    }>;
     tracks[1].seek(30);
     q.previous();
     // Should seek to 0, not change track
@@ -259,7 +269,11 @@ describe('Queue destroy', () => {
 });
 
 describe('Queue TRACK_ENDED while paused', () => {
-  type InternalTrack = { audioBuffer: AudioBuffer | null; audio: MockAudioElement; isBufferLoaded: boolean };
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+  };
   type InternalQueue = { _tracks: InternalTrack[] };
 
   // Helper: grab the mock audio element for a given track index
@@ -434,7 +448,7 @@ describe('Queue MediaSession pause guard', () => {
   // not corrupt state. This is what the guard prevents Chrome from doing.
 
   type InternalTrack = { audio: MockAudioElement };
-  type InternalQueue  = { _tracks: InternalTrack[] };
+  type InternalQueue = { _tracks: InternalTrack[] };
 
   it('calling pause() while already paused does not corrupt state', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
@@ -492,9 +506,7 @@ describe('Queue media session position updates via onProgress', () => {
     q.play();
     // Manually fire onProgress like the progress loop would
     q.onProgress({ index: 0, currentTime: 10, duration: 120 } as TrackInfo);
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({ currentTime: 10, duration: 120 }),
-    );
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ currentTime: 10, duration: 120 }));
   });
 
   it('onProgress ignores reports from non-current tracks', () => {
@@ -547,7 +559,9 @@ describe('Queue gapless transition progress', () => {
     injectBuffer(q, 1, 180);
 
     const internal = q as unknown as InternalQueue;
-    const track1 = internal._tracks[1] as unknown as { scheduleGaplessStart: (when: number) => void };
+    const track1 = internal._tracks[1] as unknown as {
+      scheduleGaplessStart: (when: number) => void;
+    };
 
     track1.scheduleGaplessStart(0); // schedule to start at ctx time 0
 
@@ -643,7 +657,7 @@ describe('Queue pause/resume after gapless transition', () => {
     advanceTime(50); // track 1 at position 50 (ctx 50)
     q.pause();
     advanceTime(30); // paused for 30s (ctx 80)
-    q.play();        // resume from 50 at ctx 80; PLAY action re-runs scheduleGapless
+    q.play(); // resume from 50 at ctx 80; PLAY action re-runs scheduleGapless
 
     // Track 2 must be scheduled at the resumed end time: 80 + (200 - 50) = 230.
     // The stale scheduled-start math gave 0 + 200 = 200 — 30s before track 1
@@ -683,7 +697,7 @@ describe('Queue seek cancels stale gapless schedule', () => {
     injectBuffer(q, 0, 300);
     q.play();
     // Let fetch+decode settle so track 1 buffer is ready and gapless is scheduled
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     // Verify track 1 was gapless-scheduled
@@ -708,7 +722,7 @@ describe('Queue seek cancels stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     const oldStart = internal._tracks[1].scheduledStartContextTime;
@@ -728,7 +742,7 @@ describe('Queue seek cancels stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     // Track 1 should be in webaudio (gapless-scheduled)
@@ -782,7 +796,7 @@ describe('Queue pause cancels stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -799,7 +813,7 @@ describe('Queue pause cancels stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -840,7 +854,7 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -857,7 +871,7 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     // Track 1 was gapless-scheduled (in webaudio state)
     expect(q.tracks[1].machineState).toBe('webaudio');
@@ -874,7 +888,7 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -890,7 +904,7 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -906,7 +920,7 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     // Track 1 was gapless-scheduled
     expect(q.tracks[1].machineState).toBe('webaudio');
@@ -924,7 +938,7 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -998,7 +1012,7 @@ describe('Queue HTML5 fallback and background loading', () => {
     expect(q.currentTrackIndex).toBe(1);
     expect(q.isPlaying).toBe(true);
     // Let the buffer decode complete
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     // Track 1's buffer should now be loaded
     const internal = q as unknown as InternalQueue;
     expect(internal._tracks[1].isBufferLoaded).toBe(true);
@@ -1007,7 +1021,11 @@ describe('Queue HTML5 fallback and background loading', () => {
 });
 
 describe('Queue preloading', () => {
-  type InternalTrack = { audioBuffer: AudioBuffer | null; audio: HTMLAudioElement; isBufferLoaded: boolean };
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: HTMLAudioElement;
+    isBufferLoaded: boolean;
+  };
   type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
   it('defers preloading next track when playing via HTML5', () => {
@@ -1026,7 +1044,7 @@ describe('Queue preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    const urls = (fetchSpy.mock.calls as any[][]).map((c) => String(c[0]));
     expect(urls.some((u: string) => u.includes('a.mp3'))).toBe(true);
   });
 
@@ -1037,7 +1055,7 @@ describe('Queue preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], playbackMethod: 'HTML5_ONLY' });
     q.play();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    const urls = (fetchSpy.mock.calls as any[][]).map((c) => String(c[0]));
     expect(urls.every((u: string) => !u.includes('a.mp3'))).toBe(true);
   });
 
@@ -1055,7 +1073,7 @@ describe('Queue preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 180);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const t1 = (q as unknown as InternalQueue)._tracks[1];
     expect(q.tracks[1].webAudioLoadingState).toBe('LOADED');
     expect(t1.isBufferLoaded).toBe(true);
@@ -1066,7 +1084,7 @@ describe('Queue preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 180);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     expect(q.tracks[1].webAudioLoadingState).toBe('ERROR');
   });
 
@@ -1075,7 +1093,7 @@ describe('Queue preloading', () => {
     const onStartNewTrack = vi.fn();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onStartNewTrack });
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     tracks[0].audio.onended?.(new Event('ended'));
     await Promise.resolve();
@@ -1088,7 +1106,7 @@ describe('Queue preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 180);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     expect(tracks[0].isBufferLoaded).toBe(true);
     expect(tracks[1].isBufferLoaded).toBe(true);
@@ -1105,7 +1123,7 @@ describe('Queue preloading', () => {
     // currentTime is driven by ctx.currentTime.
     advanceTime(20);
     // Let all fetch+decode promises settle
-    for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     // Track 1: preloaded (1 ahead, immediate next — never deferred)
     expect(tracks[1].isBufferLoaded).toBe(true);
@@ -1123,12 +1141,12 @@ describe('Queue preloading', () => {
     injectBuffer(q, 0, 180);
     q.play();
     advanceTime(20);
-    for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     // Advance to track 1
     q.next();
     advanceTime(20);
-    for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
     // Track 3 should now be preloaded (2 ahead of track 1)
     expect(tracks[3].isBufferLoaded).toBe(true);
     // Track 4 should still NOT be preloaded (beyond 2 ahead)
@@ -1142,15 +1160,15 @@ describe('Queue preloading', () => {
     injectBuffer(q, 0, 180);
     q.play();
     q.gotoTrack(3, true);
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     // Go back to track 1
     q.gotoTrack(1, true);
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     // Tracks 2 and 3 (ahead of track 1) should be preloaded
     expect(tracks[2].isBufferLoaded).toBe(true);
     expect(tracks[3].isBufferLoaded).toBe(true);
@@ -1162,15 +1180,15 @@ describe('Queue preloading', () => {
     injectBuffer(q, 0, 180);
     q.play();
     // Wait for preload chain to complete (track 1, then track 2)
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     q.gotoTrack(3, true);
     q.pause();
     // Go back via previous() while paused — track 2 has buffer, plays WebAudio
     q.previous();
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     // Track 3 (1 ahead of track 2) should be preloaded
     expect(tracks[3].isBufferLoaded).toBe(true);
@@ -1181,9 +1199,9 @@ describe('Queue preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
     // Goto track 2 without auto-play (from idle state)
     q.gotoTrack(2);
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     // Track 3 (1 ahead of track 2) should be preloaded
     expect(tracks[3].isBufferLoaded).toBe(true);
@@ -1195,7 +1213,7 @@ describe('Queue preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'], onStartNewTrack });
     injectBuffer(q, 0, 180);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     // Track 1 should be preloaded (track 0 is Web Audio, so preload is immediate)
     const tracks = (q as unknown as InternalQueue)._tracks;
     expect(tracks[1].isBufferLoaded).toBe(true);
@@ -1241,7 +1259,7 @@ describe('Queue deferred preloading', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     q.play();
-    for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
     expect(tracks[1].isBufferLoaded).toBe(true);
@@ -1252,7 +1270,7 @@ describe('Queue deferred preloading', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     injectBuffer(q, 0, 180);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     expect(tracks[1].isBufferLoaded).toBe(true);
   });
@@ -1261,8 +1279,8 @@ describe('Queue deferred preloading', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     q.gotoTrack(0);
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const tracks = (q as unknown as InternalQueue)._tracks;
     expect(tracks[1].isBufferLoaded).toBe(true);
   });
@@ -1290,9 +1308,9 @@ describe('Queue preloading without prior AudioContext', () => {
 
     // gotoTrack without playing — triggers preload on nearby tracks
     q.gotoTrack(0);
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const tracks = (q as unknown as InternalQueue)._tracks;
     // Next track should have been fetched+decoded despite no prior play()
@@ -1310,12 +1328,12 @@ describe('Queue preloading without prior AudioContext', () => {
 
     // Directly call preload on track 1 (simulating what Queue._preloadAhead does)
     (tracks[1] as unknown as { preload(): void }).preload();
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     // Fetch should have been triggered for track 1
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    const urls = (fetchSpy.mock.calls as any[][]).map((c) => String(c[0]));
     expect(urls.some((u: string) => u.includes('b.mp3'))).toBe(true);
     expect(tracks[1].isBufferLoaded).toBe(true);
   });
@@ -1331,11 +1349,11 @@ describe('Queue preloading without prior AudioContext', () => {
     const tracks = (q as unknown as InternalQueue)._tracks;
 
     (tracks[1] as unknown as { preload(): void }).preload();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     // No fetch for audio buffer — Web Audio is not available
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const urls = (fetchSpy.mock.calls as any[][]).map(c => String(c[0]));
+    const urls = (fetchSpy.mock.calls as any[][]).map((c) => String(c[0]));
     expect(urls.every((u: string) => !u.includes('b.mp3'))).toBe(true);
     expect(tracks[1].isBufferLoaded).toBe(false);
   });
@@ -1351,16 +1369,16 @@ describe('Queue preloading without prior AudioContext', () => {
 
     // gotoTrack() creates the AudioContext and triggers preloading (paused, so no deferral)
     q.gotoTrack(0);
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     // Track 1 should already be preloaded by gotoTrack()'s preload-ahead logic
     expect(tracks[1].isBufferLoaded).toBe(true);
 
     // Manually preload track 3 — should also work since ctx now exists
     (tracks[3] as unknown as { preload(): void }).preload();
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(tracks[3].isBufferLoaded).toBe(true);
   });
@@ -1478,7 +1496,11 @@ describe('Queue seek targets correct track', () => {
 // _scheduledNextIndex cleanup after gapless transition
 // ---------------------------------------------------------------------------
 describe('Queue _scheduledNextIndex cleanup', () => {
-  type InternalTrack = { audioBuffer: AudioBuffer | null; audio: MockAudioElement; isBufferLoaded: boolean };
+  type InternalTrack = {
+    audioBuffer: AudioBuffer | null;
+    audio: MockAudioElement;
+    isBufferLoaded: boolean;
+  };
   type InternalQueue = { _tracks: InternalTrack[]; _scheduledNextIndex: number | null };
 
   it('gapless-transitioned track is removed from _scheduledNextIndex', async () => {
@@ -1612,7 +1634,7 @@ describe('Queue gapless scheduling state', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -1631,7 +1653,7 @@ describe('Queue gapless scheduling state', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3'] });
     injectBuffer(q, 0, 300);
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -1662,7 +1684,7 @@ describe('Queue autoplay blocked', () => {
     mockPlayBlocked(getTrackAudio(q, 0));
 
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(q.isPaused).toBe(true);
     expect(q.isPlaying).toBe(false);
@@ -1675,7 +1697,7 @@ describe('Queue autoplay blocked', () => {
     mockPlayBlocked(audio);
 
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(q.isPaused).toBe(true);
 
@@ -1692,7 +1714,7 @@ describe('Queue autoplay blocked', () => {
     mockPlayBlocked(getTrackAudio(q, 1));
 
     q.gotoTrack(1, true);
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(q.isPaused).toBe(true);
     expect(q.isPlaying).toBe(false);
@@ -1728,7 +1750,7 @@ describe('Queue gapless scheduling lookahead guard', () => {
     (internal._tracks[0].audio as unknown as MockAudioElement).duration = 300;
     (internal._tracks[0].audio as unknown as MockAudioElement).currentTime = 0;
 
-    for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
 
     expect(q.tracks[0].playbackType).toBe('WEBAUDIO');
     expect(internal._scheduledNextIndex).toBe(1);
@@ -1743,7 +1765,7 @@ describe('Queue gapless scheduling lookahead guard', () => {
     q.play();
 
     // Let fetch+decode finish for track 1
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as unknown as InternalQueue;
     // WebAudio track with 300s remaining should still be scheduled (no guard)

@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Queue } from '../../src/Queue';
-import { mockFetchSuccess, mockFetchRedirect, MockAudioElement, advanceTime, MockGainNode } from '../setup';
+import {
+  mockFetchSuccess,
+  mockFetchRedirect,
+  MockAudioElement,
+  advanceTime,
+  MockGainNode,
+} from '../setup';
 
 describe('crossover end-to-end flow', () => {
   it('after q.play() + decode, current track crosses over and HTML5 element is paused', async () => {
@@ -8,10 +14,10 @@ describe('crossover end-to-end flow', () => {
     const debug: string[] = [];
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onDebug: (m: string) => debug.push(m) });
     q.play();
-    for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 15; i++) await new Promise((r) => setTimeout(r, 0));
     // The HTML5 element is paused after the crossfade completes.
     // The delay includes the scheduling lead (~50 ms) plus the fade (~30 ms).
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 150));
 
     const tracks = (q as any)._tracks;
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
@@ -19,7 +25,7 @@ describe('crossover end-to-end flow', () => {
     expect(tracks[0].isPlaying).toBe(true);
     expect((tracks[0].audio as MockAudioElement).paused).toBe(true);
 
-    expect(debug.some(m => m.includes('crossoverHtml5ToWebAudio'))).toBe(true);
+    expect(debug.some((m) => m.includes('crossoverHtml5ToWebAudio'))).toBe(true);
   });
 
   it('when paused before BUFFER_READY, crossover moves to webaudio paused (no source started)', async () => {
@@ -27,7 +33,7 @@ describe('crossover end-to-end flow', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
     q.pause();
-    for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 15; i++) await new Promise((r) => setTimeout(r, 0));
 
     const tracks = (q as any)._tracks;
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
@@ -58,19 +64,23 @@ describe('crossover end-to-end flow', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
     // Let microtasks settle. Track 0's fetch is hung (we haven't resolved it).
-    for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 
     // Track 1's fetch must NOT have started yet — only HEAD requests and track 0's GET.
-    const calls = fetchSpy.mock.calls.map(c => `${(c[1] as RequestInit | undefined)?.method ?? 'GET'} ${String(c[0])}`);
-    expect(calls.some(c => c.includes('GET') && c.includes('b.mp3'))).toBe(false);
+    const calls = fetchSpy.mock.calls.map(
+      (c) => `${(c[1] as RequestInit | undefined)?.method ?? 'GET'} ${String(c[0])}`
+    );
+    expect(calls.some((c) => c.includes('GET') && c.includes('b.mp3'))).toBe(false);
 
     // Resolve track 0's fetch → BUFFER_READY → crossover → gate releases.
     resolveTrack0Fetch(new ArrayBuffer(1024));
-    for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
 
     // Now track 1's fetch should have started.
-    const callsAfter = fetchSpy.mock.calls.map(c => `${(c[1] as RequestInit | undefined)?.method ?? 'GET'} ${String(c[0])}`);
-    expect(callsAfter.some(c => c.includes('GET') && c.includes('b.mp3'))).toBe(true);
+    const callsAfter = fetchSpy.mock.calls.map(
+      (c) => `${(c[1] as RequestInit | undefined)?.method ?? 'GET'} ${String(c[0])}`
+    );
+    expect(callsAfter.some((c) => c.includes('GET') && c.includes('b.mp3'))).toBe(true);
   });
 
   it('Fix 2 — crossover triggers cancel-and-reschedule of any existing gapless schedule', async () => {
@@ -79,14 +89,14 @@ describe('crossover end-to-end flow', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onDebug: (m: string) => debug.push(m) });
     q.play();
     advanceTime(20);
-    for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
 
     // After crossover, _scheduledNextIndex is set, and the cancel-and-reschedule
     // path was taken (TRACK_LOADED for the current track).
     expect((q as any)._scheduledNextIndex).toBe(1);
     // The cancel-and-reschedule path is what we want to confirm fired. The debug
     // log shows _cancelScheduledGapless followed by _tryScheduleGapless.
-    const scheduledLines = debug.filter(m => m.includes('_tryScheduleGapless: scheduled'));
+    const scheduledLines = debug.filter((m) => m.includes('_tryScheduleGapless: scheduled'));
     expect(scheduledLines.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -100,8 +110,8 @@ describe('crossover end-to-end flow', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
-    for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 150));
+    for (let i = 0; i < 15; i++) await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 150));
 
     const tracks = (q as any)._tracks;
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
@@ -111,16 +121,22 @@ describe('crossover end-to-end flow', () => {
 
     // Two GainNodes should have ramped — the html5GainNode (1→0) and the
     // WebAudio fade gain (0→1). Inspect createGain call results.
-    const ctx = (q as any)._tracks[0].ctx as { createGain: { mock: { results: { value: MockGainNode }[] } } };
+    const ctx = (q as any)._tracks[0].ctx as {
+      createGain: { mock: { results: { value: MockGainNode }[] } };
+    };
     const gainNodes = ctx.createGain.mock.results.map((r) => r.value);
 
     const html5FadeNode = gainNodes.find((g) =>
-      (g.gain.linearRampToValueAtTime as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[0] === 0)
+      (g.gain.linearRampToValueAtTime as ReturnType<typeof vi.fn>).mock.calls.some(
+        (call) => call[0] === 0
+      )
     );
     expect(html5FadeNode).toBeDefined();
 
     const webAudioFadeNode = gainNodes.find((g) =>
-      (g.gain.linearRampToValueAtTime as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[0] === 1)
+      (g.gain.linearRampToValueAtTime as ReturnType<typeof vi.fn>).mock.calls.some(
+        (call) => call[0] === 1
+      )
     );
     expect(webAudioFadeNode).toBeDefined();
   });
@@ -136,7 +152,7 @@ describe('crossover end-to-end flow', () => {
     mockFetchRedirect('https://cdn.example.com/redirected.mp3');
     const q = new Queue({ tracks: ['https://example.com/a.mp3', 'b.mp3'] });
     q.play();
-    for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
 
     const tracks = (q as any)._tracks;
     expect((tracks[0].audio as MockAudioElement).src).toBe('https://example.com/a.mp3');
@@ -155,13 +171,15 @@ describe('crossover end-to-end flow', () => {
     const tracks = (q as any)._tracks;
     (tracks[0].audio as MockAudioElement).currentTime = 4;
 
-    for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 15; i++) await new Promise((r) => setTimeout(r, 0));
 
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
 
-    const sourceCreate = (tracks[0].ctx.createBufferSource as ReturnType<typeof vi.fn>);
-    const allSources = sourceCreate.mock.results.map((r) => r.value as { start: ReturnType<typeof vi.fn> });
-    const startedSource = allSources.find(s => s.start.mock.calls.length > 0);
+    const sourceCreate = tracks[0].ctx.createBufferSource as ReturnType<typeof vi.fn>;
+    const allSources = sourceCreate.mock.results.map(
+      (r) => r.value as { start: ReturnType<typeof vi.fn> }
+    );
+    const startedSource = allSources.find((s) => s.start.mock.calls.length > 0);
     expect(startedSource).toBeDefined();
     const [, offsetArg] = startedSource!.start.mock.calls[0];
     // With the scheduling lead (≥20 ms at 1x rate), the source starts
@@ -183,7 +201,7 @@ describe('crossover end-to-end flow', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
     advanceTime(20);
-    for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as any;
     expect(internal._scheduledNextIndex).toBe(1);
@@ -194,7 +212,7 @@ describe('crossover end-to-end flow', () => {
 
     // Seek the current track close to the end → cancelAndRescheduleGapless.
     q.seek(track1.duration - 1);
-    for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 
     // gainNode of the next track should NOT have been disconnected.
     expect(track1.gainNode.disconnect.mock.calls.length).toBe(gainNodeDisconnectsBefore);
@@ -210,22 +228,24 @@ describe('crossover end-to-end flow', () => {
     // track to 31.5, but the HTML5 element's currentTime stays low because
     // the element hasn't loaded/seeked yet.
     q.gotoTrack(0, false, 31.5);
-    for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
 
     const tracks = (q as any)._tracks;
     // HTML5 element's currentTime is still near 0
     (tracks[0].audio as MockAudioElement).currentTime = 1.3;
 
     q.play();
-    for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 150));
+    for (let i = 0; i < 15; i++) await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 150));
 
     expect(tracks[0].playbackType).toBe('WEBAUDIO');
 
     // The WebAudio source should have started near 31.5, not at 1.3
-    const sourceCreate = (tracks[0].ctx.createBufferSource as ReturnType<typeof vi.fn>);
-    const allSources = sourceCreate.mock.results.map((r) => r.value as { start: ReturnType<typeof vi.fn> });
-    const startedSource = allSources.find(s => s.start.mock.calls.length > 0);
+    const sourceCreate = tracks[0].ctx.createBufferSource as ReturnType<typeof vi.fn>;
+    const allSources = sourceCreate.mock.results.map(
+      (r) => r.value as { start: ReturnType<typeof vi.fn> }
+    );
+    const startedSource = allSources.find((s) => s.start.mock.calls.length > 0);
     expect(startedSource).toBeDefined();
     const [, offsetArg] = startedSource!.start.mock.calls[0];
     expect(offsetArg).toBeGreaterThanOrEqual(31.5);
@@ -237,7 +257,7 @@ describe('crossover end-to-end flow', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
     advanceTime(20); // past 15s threshold so further preloads aren't deferred
-    for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 0));
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
 
     const internal = q as any;
     expect(internal._tracks[0].playbackType).toBe('WEBAUDIO');

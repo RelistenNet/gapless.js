@@ -7,7 +7,7 @@ describe('media key support via silent anchor element', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const anchor = (q as any)._mediaSessionAnchor as MockAudioElement;
     expect(anchor).toBeDefined();
@@ -20,7 +20,7 @@ describe('media key support via silent anchor element', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const anchor = (q as any)._mediaSessionAnchor as MockAudioElement;
     expect(anchor.paused).toBe(false);
@@ -33,7 +33,7 @@ describe('media key support via silent anchor element', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     q.pause();
 
     const anchor = (q as any)._mediaSessionAnchor as MockAudioElement;
@@ -47,8 +47,8 @@ describe('media key support via silent anchor element', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
-    for (let i = 0; i < 15; i++) await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 150));
+    for (let i = 0; i < 15; i++) await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 150));
 
     const tracks = (q as any)._tracks;
     expect(tracks[0].machineState).toBe('webaudio');
@@ -62,7 +62,7 @@ describe('media key support via silent anchor element', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
     const anchor1 = (q as any)._mediaSessionAnchor;
 
     q.pause();
@@ -76,7 +76,7 @@ describe('media key support via silent anchor element', () => {
     mockFetchSuccess();
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'] });
     q.play();
-    await new Promise(r => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
 
     const anchor = (q as any)._mediaSessionAnchor as MockAudioElement;
     expect(anchor.paused).toBe(false);

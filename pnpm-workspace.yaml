@@ -2,3 +2,9 @@ packages:
   - 'demo'
 allowBuilds:
   esbuild: true
+# timber.js alphas ship several times a week; install them as soon as they're
+# published instead of waiting out the release-age cooldown.
+minimumReleaseAgeExclude:
+  - '@timber-js/*'
+trustPolicyExclude:
+  - '@timber-js/*'

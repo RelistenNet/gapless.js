@@ -72,26 +72,23 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
 
   // 1. State is one of the valid states
   const validStates = ['idle', 'playing', 'paused', 'ended'];
-  expect(
-    validStates.includes(snap.state),
-    `${label}: Invalid state "${snap.state}"`,
-  ).toBe(true);
+  expect(validStates.includes(snap.state), `${label}: Invalid state "${snap.state}"`).toBe(true);
 
   // 2. Machine trackCount matches actual tracks length
   expect(
     snap.context.trackCount,
-    `${label}: trackCount mismatch machine=${snap.context.trackCount} actual=${trackCount}`,
+    `${label}: trackCount mismatch machine=${snap.context.trackCount} actual=${trackCount}`
   ).toBe(trackCount);
 
   // 3. currentTrackIndex is in bounds (0 <= idx < trackCount, or >= 0 when empty)
   expect(
     snap.context.currentTrackIndex,
-    `${label}: currentTrackIndex ${snap.context.currentTrackIndex} < 0`,
+    `${label}: currentTrackIndex ${snap.context.currentTrackIndex} < 0`
   ).toBeGreaterThanOrEqual(0);
   if (trackCount > 0) {
     expect(
       snap.context.currentTrackIndex,
-      `${label}: currentTrackIndex ${snap.context.currentTrackIndex} >= trackCount ${trackCount}`,
+      `${label}: currentTrackIndex ${snap.context.currentTrackIndex} >= trackCount ${trackCount}`
     ).toBeLessThan(trackCount);
   }
 
@@ -99,7 +96,7 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
   for (let i = 0; i < trackCount; i++) {
     expect(
       tracks[i].index,
-      `${label}: _tracks[${i}].index is ${tracks[i].index}, expected ${i}`,
+      `${label}: _tracks[${i}].index is ${tracks[i].index}, expected ${i}`
     ).toBe(i);
   }
 
@@ -107,7 +104,7 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
   if (trackCount === 0) {
     expect(
       snap.state === 'playing' || snap.state === 'paused',
-      `${label}: state is "${snap.state}" with 0 tracks`,
+      `${label}: state is "${snap.state}" with 0 tracks`
     ).toBe(false);
   }
 
@@ -115,19 +112,13 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
   if (snap.state === 'ended' && trackCount > 0) {
     expect(
       snap.context.currentTrackIndex,
-      `${label}: ended state but currentTrackIndex ${snap.context.currentTrackIndex} is not last (trackCount=${trackCount})`,
+      `${label}: ended state but currentTrackIndex ${snap.context.currentTrackIndex} is not last (trackCount=${trackCount})`
     ).toBeGreaterThanOrEqual(trackCount - 1);
   }
 
   // 7. volume should always be in [0, 1]
-  expect(
-    queue.volume,
-    `${label}: volume ${queue.volume} out of range`,
-  ).toBeGreaterThanOrEqual(0);
-  expect(
-    queue.volume,
-    `${label}: volume ${queue.volume} out of range`,
-  ).toBeLessThanOrEqual(1);
+  expect(queue.volume, `${label}: volume ${queue.volume} out of range`).toBeGreaterThanOrEqual(0);
+  expect(queue.volume, `${label}: volume ${queue.volume} out of range`).toBeLessThanOrEqual(1);
 
   // 8. isPlaying / isPaused should be consistent with state
   if (snap.state === 'playing') {
@@ -142,25 +133,26 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
   // 9. currentTrackIndex getter should match machine context
   expect(
     queue.currentTrackIndex,
-    `${label}: public currentTrackIndex getter ${queue.currentTrackIndex} != machine ${snap.context.currentTrackIndex}`,
+    `${label}: public currentTrackIndex getter ${queue.currentTrackIndex} != machine ${snap.context.currentTrackIndex}`
   ).toBe(snap.context.currentTrackIndex);
 
   // 10. tracks.length should match internal _tracks.length
   expect(
     queue.tracks.length,
-    `${label}: public tracks.length ${queue.tracks.length} != internal ${trackCount}`,
+    `${label}: public tracks.length ${queue.tracks.length} != internal ${trackCount}`
   ).toBe(trackCount);
 
   // 11. _scheduledNextIndex (if set) should be in bounds
-  const scheduledIdx = (queue as unknown as { _scheduledNextIndex: number | null })._scheduledNextIndex;
+  const scheduledIdx = (queue as unknown as { _scheduledNextIndex: number | null })
+    ._scheduledNextIndex;
   if (scheduledIdx !== null) {
     expect(
       scheduledIdx,
-      `${label}: _scheduledNextIndex ${scheduledIdx} < 0`,
+      `${label}: _scheduledNextIndex ${scheduledIdx} < 0`
     ).toBeGreaterThanOrEqual(0);
     expect(
       scheduledIdx,
-      `${label}: _scheduledNextIndex ${scheduledIdx} >= trackCount ${trackCount}`,
+      `${label}: _scheduledNextIndex ${scheduledIdx} >= trackCount ${trackCount}`
     ).toBeLessThan(trackCount);
   }
 }
@@ -264,7 +256,7 @@ function runFuzzScenario(
   seed: number,
   initialTracks: number,
   numOps: number,
-  weights: Weights,
+  weights: Weights
 ): void {
   trackCounter = 0;
   const rand = mulberry32(seed);

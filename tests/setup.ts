@@ -58,7 +58,12 @@ export class MockAudioBufferSourceNode {
 // Mock GainNode
 // ---------------------------------------------------------------------------
 export class MockGainNode {
-  gain: { value: number; setValueAtTime: Mock; linearRampToValueAtTime: Mock; cancelScheduledValues: Mock } = {
+  gain: {
+    value: number;
+    setValueAtTime: Mock;
+    linearRampToValueAtTime: Mock;
+    cancelScheduledValues: Mock;
+  } = {
     value: 1,
     setValueAtTime: vi.fn(),
     linearRampToValueAtTime: vi.fn(),
@@ -81,7 +86,11 @@ export class MockAudioBuffer {
   /** Optional: simulate `paddingSec` of silence at the start, then full-amplitude content. */
   paddingSec = 0;
 
-  constructor(public duration: number, public numberOfChannels = 2, public sampleRate = 44100) {}
+  constructor(
+    public duration: number,
+    public numberOfChannels = 2,
+    public sampleRate = 44100
+  ) {}
 
   get length(): number {
     return Math.round(this.duration * this.sampleRate);
@@ -122,7 +131,7 @@ export class MockAudioContext {
       const mockBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
       success?.(mockBuffer);
       return Promise.resolve(mockBuffer);
-    },
+    }
   );
 }
 
@@ -146,7 +155,10 @@ export class MockAudioElement {
   // Event handlers
   onerror: ((e: unknown) => void) | null = null;
   onended: (() => void) | null = null;
-  private _listeners: Record<string, Array<{ cb: EventListenerOrEventListenerObject; once: boolean }>> = {};
+  private _listeners: Record<
+    string,
+    Array<{ cb: EventListenerOrEventListenerObject; once: boolean }>
+  > = {};
 
   play = vi.fn(() => {
     this.paused = false;
@@ -211,17 +223,20 @@ export function mockFetchSuccess(arrayBuffer = new ArrayBuffer(1024)): Mock {
 }
 
 export function mockFetchRedirect(finalUrl: string, arrayBuffer = new ArrayBuffer(1024)): void {
-  vi.stubGlobal('fetch', vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
-    if (opts?.method === 'HEAD') {
-      return Promise.resolve({ ok: true, url: finalUrl, redirected: true });
-    }
-    return Promise.resolve({
-      ok: true,
-      url: finalUrl,
-      redirected: false,
-      arrayBuffer: () => Promise.resolve(arrayBuffer),
-    });
-  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
+      if (opts?.method === 'HEAD') {
+        return Promise.resolve({ ok: true, url: finalUrl, redirected: true });
+      }
+      return Promise.resolve({
+        ok: true,
+        url: finalUrl,
+        redirected: false,
+        arrayBuffer: () => Promise.resolve(arrayBuffer),
+      });
+    })
+  );
 }
 
 export function mockFetchFailure(): void {
@@ -250,10 +265,13 @@ beforeEach(() => {
 
   // requestAnimationFrame shim (happy-dom may not have it)
   if (typeof requestAnimationFrame === 'undefined') {
-    vi.stubGlobal('requestAnimationFrame', vi.fn((cb: FrameRequestCallback) => {
-      setTimeout(() => cb(0), 0);
-      return 0;
-    }));
+    vi.stubGlobal(
+      'requestAnimationFrame',
+      vi.fn((cb: FrameRequestCallback) => {
+        setTimeout(() => cb(0), 0);
+        return 0;
+      })
+    );
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
   }
 });

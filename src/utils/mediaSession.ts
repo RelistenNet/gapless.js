@@ -7,8 +7,7 @@
 
 import type { TrackMetadata } from '../types';
 
-const hasMediaSession =
-  typeof navigator !== 'undefined' && 'mediaSession' in navigator;
+const hasMediaSession = typeof navigator !== 'undefined' && 'mediaSession' in navigator;
 
 export interface MediaSessionHandlers {
   onPlay: () => void;
@@ -47,9 +46,7 @@ export function updateMediaSessionMetadata(metadata?: TrackMetadata): void {
 }
 
 /** Sync the OS playback state indicator (playing / paused). */
-export function updateMediaSessionPlaybackState(
-  isPlaying: boolean,
-): void {
+export function updateMediaSessionPlaybackState(isPlaying: boolean): void {
   if (!hasMediaSession) return;
   navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
 }
@@ -58,7 +55,7 @@ export function updateMediaSessionPlaybackState(
 export function updateMediaSessionPositionState(
   duration: number,
   position: number,
-  playbackRate = 1,
+  playbackRate = 1
 ): void {
   if (!hasMediaSession) return;
   try {

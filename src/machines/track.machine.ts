@@ -87,7 +87,8 @@ export function createTrackMachine(initialContext: TrackContext) {
     guards: {
       canPlayWebAudio: () => false,
       isWebAudioOnly: () => false,
-      canStartFetch: ({ context }) => context.webAudioLoadingState === 'NONE' && !context.fetchStarted,
+      canStartFetch: ({ context }) =>
+        context.webAudioLoadingState === 'NONE' && !context.fetchStarted,
     },
     actions: {
       playHtml5: () => {},
@@ -119,7 +120,10 @@ export function createTrackMachine(initialContext: TrackContext) {
       setLoadingState: assign({ webAudioLoadingState: () => 'LOADING' as WebAudioLoadingState }),
       setLoadedState: assign({ webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState }),
       setErrorState: assign({ webAudioLoadingState: () => 'ERROR' as WebAudioLoadingState }),
-      clearScheduleAndLookahead: assign({ scheduledStartContextTime: () => null, notifiedLookahead: () => false }),
+      clearScheduleAndLookahead: assign({
+        scheduledStartContextTime: () => null,
+        notifiedLookahead: () => false,
+      }),
       setPlayingWebAudio: assign({
         isPlaying: () => true,
         webAudioLoadingState: () => 'LOADED' as WebAudioLoadingState,
@@ -214,11 +218,7 @@ export function createTrackMachine(initialContext: TrackContext) {
             {
               guard: 'canPlayWebAudio',
               target: 'webaudio',
-              actions: [
-                'setPlayingWebAudio',
-                'startSourceNode',
-                'startProgressLoop',
-              ],
+              actions: ['setPlayingWebAudio', 'startSourceNode', 'startProgressLoop'],
             },
             {
               guard: 'isWebAudioOnly',
@@ -226,23 +226,21 @@ export function createTrackMachine(initialContext: TrackContext) {
             },
             {
               target: 'html5',
-              actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop', 'triggerFetchForPendingPlay'],
+              actions: [
+                'setIsPlaying',
+                'playHtml5',
+                'startProgressLoop',
+                'triggerFetchForPendingPlay',
+              ],
             },
           ],
           PLAY_WEBAUDIO: {
             target: 'webaudio',
-            actions: [
-              'setPlayingWebAudio',
-              'startSourceNode',
-              'startProgressLoop',
-            ],
+            actions: ['setPlayingWebAudio', 'startSourceNode', 'startProgressLoop'],
           },
           SCHEDULE_GAPLESS: {
             target: 'webaudio',
-            actions: [
-              'setScheduledGapless',
-              'startScheduledSourceNode',
-            ],
+            actions: ['setScheduledGapless', 'startScheduledSourceNode'],
           },
           PRELOAD: { target: 'loading' },
           BUFFER_LOADING: {
@@ -252,7 +250,13 @@ export function createTrackMachine(initialContext: TrackContext) {
             {
               guard: ({ context }: { context: TrackContext }) => context.pendingPlay,
               target: 'webaudio',
-              actions: ['clearPendingPlay', 'setPlayingWebAudio', 'startSourceNode', 'startProgressLoop', 'notifyBufferReady'],
+              actions: [
+                'clearPendingPlay',
+                'setPlayingWebAudio',
+                'startSourceNode',
+                'startProgressLoop',
+                'notifyBufferReady',
+              ],
             },
             {
               actions: ['setLoadedState', 'notifyBufferReady'],
@@ -273,7 +277,13 @@ export function createTrackMachine(initialContext: TrackContext) {
       html5: {
         on: {
           PAUSE: {
-            actions: ['clearIsPlaying', 'freezePausedTime', 'pauseHtml5', 'stopProgressLoop', 'reportProgress'],
+            actions: [
+              'clearIsPlaying',
+              'freezePausedTime',
+              'pauseHtml5',
+              'stopProgressLoop',
+              'reportProgress',
+            ],
           },
           PLAY: {
             actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop'],
@@ -300,11 +310,7 @@ export function createTrackMachine(initialContext: TrackContext) {
             actions: 'setErrorState',
           },
           SEEK: {
-            actions: [
-              'setSeekTarget',
-              'seekHtml5',
-              'reportProgress',
-            ],
+            actions: ['setSeekTarget', 'seekHtml5', 'reportProgress'],
           },
           LOOKAHEAD_REACHED: {
             actions: 'setNotifiedLookahead',
@@ -329,7 +335,14 @@ export function createTrackMachine(initialContext: TrackContext) {
           },
           DEACTIVATE: {
             target: 'idle',
-            actions: ['clearIsPlaying', 'pauseHtml5', 'resetHtml5Element', 'resetTiming', 'stopProgressLoop', 'clearSeekTarget'],
+            actions: [
+              'clearIsPlaying',
+              'pauseHtml5',
+              'resetHtml5Element',
+              'resetTiming',
+              'stopProgressLoop',
+              'clearSeekTarget',
+            ],
           },
         },
       },
@@ -349,7 +362,13 @@ export function createTrackMachine(initialContext: TrackContext) {
             {
               guard: ({ context }: { context: TrackContext }) => context.pendingPlay,
               target: 'webaudio',
-              actions: ['clearPendingPlay', 'setPlayingWebAudio', 'startSourceNode', 'startProgressLoop', 'notifyBufferReady'],
+              actions: [
+                'clearPendingPlay',
+                'setPlayingWebAudio',
+                'startSourceNode',
+                'startProgressLoop',
+                'notifyBufferReady',
+              ],
             },
             {
               target: 'idle',
@@ -364,11 +383,7 @@ export function createTrackMachine(initialContext: TrackContext) {
             {
               guard: 'canPlayWebAudio',
               target: 'webaudio',
-              actions: [
-                'setPlayingWebAudio',
-                'startSourceNode',
-                'startProgressLoop',
-              ],
+              actions: ['setPlayingWebAudio', 'startSourceNode', 'startProgressLoop'],
             },
             {
               guard: 'isWebAudioOnly',
@@ -376,23 +391,21 @@ export function createTrackMachine(initialContext: TrackContext) {
             },
             {
               target: 'html5',
-              actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop', 'triggerFetchForPendingPlay'],
+              actions: [
+                'setIsPlaying',
+                'playHtml5',
+                'startProgressLoop',
+                'triggerFetchForPendingPlay',
+              ],
             },
           ],
           PLAY_WEBAUDIO: {
             target: 'webaudio',
-            actions: [
-              'setPlayingWebAudio',
-              'startSourceNode',
-              'startProgressLoop',
-            ],
+            actions: ['setPlayingWebAudio', 'startSourceNode', 'startProgressLoop'],
           },
           SCHEDULE_GAPLESS: {
             target: 'webaudio',
-            actions: [
-              'setScheduledGapless',
-              'startScheduledSourceNode',
-            ],
+            actions: ['setScheduledGapless', 'startScheduledSourceNode'],
           },
           ACTIVATE: {
             target: 'idle',
@@ -442,12 +455,7 @@ export function createTrackMachine(initialContext: TrackContext) {
             actions: 'setPlayingWebAudioType',
           },
           SEEK: {
-            actions: [
-              'setSeekTarget',
-              'clearScheduledStart',
-              'seekWebAudio',
-              'reportProgress',
-            ],
+            actions: ['setSeekTarget', 'clearScheduledStart', 'seekWebAudio', 'reportProgress'],
           },
           SET_VOLUME: {},
           CANCEL_GAPLESS: {

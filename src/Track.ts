@@ -7,7 +7,13 @@ import { getAudioContext, resumeAudioContext } from './utils/audioContext';
 import { createTrackMachine } from './machines/track.machine';
 import { fetchDecodeMachine } from './machines/fetchDecode.machine';
 import type { TrackContext } from './machines/track.machine';
-import type { TrackInfo, TrackMetadata, WebAudioLoadingState, PlaybackType, PlaybackMethod } from './types';
+import type {
+  TrackInfo,
+  TrackMetadata,
+  WebAudioLoadingState,
+  PlaybackType,
+  PlaybackMethod,
+} from './types';
 
 export interface TrackQueueRef {
   onTrackEnded(track: Track): void;
@@ -38,7 +44,6 @@ const PRELOAD_DELAY = 15;
  * two streams.
  */
 const CROSSOVER_FADE_SEC = 0.03;
-
 
 export class Track {
   readonly index: number;
@@ -290,7 +295,8 @@ export class Track {
           queueMicrotask(() => this.queueRef.onProgress(this.toInfo()));
         },
         seekHtml5: ({ context }: { context: TrackContext }) => this._seekHtml5(context.seekTarget),
-        seekWebAudio: ({ context }: { context: TrackContext }) => this._seekWebAudio(context.seekTarget),
+        seekWebAudio: ({ context }: { context: TrackContext }) =>
+          this._seekWebAudio(context.seekTarget),
         resetHtml5Element: () => {
           this._seekAbort.abort();
           this._seekAbort = new AbortController();
@@ -345,21 +351,29 @@ export class Track {
   }
 
   setPlaybackRate(rate: number): void {
-    if (this.ctx && this.sourceNode && this._actor.getSnapshot().context.isPlaying
-        && this.ctx.currentTime >= this._waRefCtxTime) {
+    if (
+      this.ctx &&
+      this.sourceNode &&
+      this._actor.getSnapshot().context.isPlaying &&
+      this.ctx.currentTime >= this._waRefCtxTime
+    ) {
       const oldRate = this.sourceNode.playbackRate.value;
-      this._waRefTrackTime = this._waRefTrackTime + (this.ctx.currentTime - this._waRefCtxTime) * oldRate;
+      this._waRefTrackTime =
+        this._waRefTrackTime + (this.ctx.currentTime - this._waRefCtxTime) * oldRate;
       this._waRefCtxTime = this.ctx.currentTime;
     }
     this.audio.playbackRate = rate;
     if (this.sourceNode) {
       this.sourceNode.playbackRate.value = rate;
       if (this.audioBuffer && this.ctx) {
-        const remaining = this.audioBuffer.duration - this._bufferStartPaddingSec - this._waRefTrackTime;
+        const remaining =
+          this.audioBuffer.duration - this._bufferStartPaddingSec - this._waRefTrackTime;
         if (remaining > 0) {
           try {
             this.sourceNode.stop(this._waRefCtxTime + remaining / rate);
-          } catch { /* already stopped */ }
+          } catch {
+            /* already stopped */
+          }
         }
       }
     }
@@ -452,7 +466,11 @@ export class Track {
     if (snap.value === 'webaudio') {
       if (!snap.context.isPlaying) return snap.context.seekTarget;
       if (!this.ctx) return 0;
-      return Math.max(0, this._waRefTrackTime + (this.ctx.currentTime - this._waRefCtxTime) * this.queueRef.playbackRate);
+      return Math.max(
+        0,
+        this._waRefTrackTime +
+          (this.ctx.currentTime - this._waRefCtxTime) * this.queueRef.playbackRate
+      );
     }
     if ((snap.value === 'idle' || snap.value === 'loading') && snap.context.seekTarget > 0) {
       return snap.context.seekTarget;
@@ -546,9 +564,13 @@ export class Track {
         this.audio.currentTime = seekTarget;
       } else {
         const target = seekTarget;
-        this.audio.addEventListener('loadedmetadata', () => {
-          this.audio.currentTime = target;
-        }, { once: true, signal: this._seekAbort.signal });
+        this.audio.addEventListener(
+          'loadedmetadata',
+          () => {
+            this.audio.currentTime = target;
+          },
+          { once: true, signal: this._seekAbort.signal }
+        );
       }
     }
     const promise = this.audio.play();
@@ -611,10 +633,7 @@ export class Track {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
 
     const htmlTime = this.audio.currentTime;
-    const offset =
-      isFinite(seekTarget) && seekTarget > htmlTime
-        ? seekTarget
-        : htmlTime;
+    const offset = isFinite(seekTarget) && seekTarget > htmlTime ? seekTarget : htmlTime;
     this._crossoverComputedOffset = isFinite(offset) ? offset : 0;
 
     if (!wasPlaying) {
@@ -644,11 +663,14 @@ export class Track {
     } else if (!this._html5GainNode) {
       if (when !== null && this.ctx) {
         const delayMs = (when - this.ctx.currentTime) * 1000;
-        setTimeout(() => {
-          this.audio.volume = 0;
-          this.audio.pause();
-          this.audio.volume = 1;
-        }, Math.max(0, delayMs));
+        setTimeout(
+          () => {
+            this.audio.volume = 0;
+            this.audio.pause();
+            this.audio.volume = 1;
+          },
+          Math.max(0, delayMs)
+        );
       } else {
         this.audio.volume = 0;
         this.audio.pause();
@@ -695,7 +717,10 @@ export class Track {
 
     const lead = wasSuspended
       ? 0.15
-      : Math.max(0.02, 2 * ((this.ctx as unknown as { baseLatency?: number }).baseLatency || 0) + 0.01);
+      : Math.max(
+          0.02,
+          2 * ((this.ctx as unknown as { baseLatency?: number }).baseLatency || 0) + 0.01
+        );
     const when = this.ctx.currentTime + lead;
 
     const rate = this.queueRef.playbackRate;
@@ -781,7 +806,9 @@ export class Track {
         queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
       }
 
-      const preloadThreshold = isNaN(this.duration) ? PRELOAD_DELAY : Math.min(this.duration * 0.2, PRELOAD_DELAY);
+      const preloadThreshold = isNaN(this.duration)
+        ? PRELOAD_DELAY
+        : Math.min(this.duration * 0.2, PRELOAD_DELAY);
       if (!this._notifiedPreloadThreshold && this.currentTime >= preloadThreshold) {
         this._notifiedPreloadThreshold = true;
         queueMicrotask(() => this.queueRef.onPreloadReady(this));

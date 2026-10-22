@@ -14,8 +14,12 @@ let _audioContext: AudioContext | null | undefined = undefined;
 function createAudioContext(): AudioContext | null {
   if (!isBrowser) return null;
   const Ctor =
-    (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext })
-      .AudioContext ??
+    (
+      window as unknown as {
+        AudioContext?: typeof AudioContext;
+        webkitAudioContext?: typeof AudioContext;
+      }
+    ).AudioContext ??
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return null;
   return new Ctor();
