@@ -14,10 +14,7 @@ export default function OpengraphImage() {
         gap: 48,
         padding: 96,
         color: '#f4f4f5',
-        // A green glow behind the mark, fading into the zinc of the site.
-        backgroundColor: '#09090b',
-        backgroundImage:
-          'radial-gradient(circle at 18% 30%, rgba(16, 185, 129, 0.35), rgba(16, 185, 129, 0) 55%), linear-gradient(135deg, #052e22 0%, #09090b 60%)',
+        background: '#0a1f17',
       }}
     >
       <div style={{ width: 160, height: 160, display: 'flex' }}>
@@ -25,7 +22,7 @@ export default function OpengraphImage() {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ fontSize: 88, fontWeight: 600, letterSpacing: -2 }}>gapless.js</div>
-        <div style={{ fontSize: 40, color: '#a7f3d0' }}>Gapless audio playback for the web</div>
+        <div style={{ fontSize: 40, color: '#a1a1aa' }}>Gapless audio playback for the web</div>
       </div>
     </div>,
     { width: 1200, height: 630 }
