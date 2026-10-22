@@ -86,3 +86,57 @@ describe('media key support via silent anchor element', () => {
     expect((q as any)._mediaSessionAnchor).toBeNull();
   });
 });
+
+describe('media session handlers with several queues on one page', () => {
+  function stubMediaSession() {
+    const handlers = new Map<string, MediaSessionActionHandler | null>();
+    const mediaSession = {
+      metadata: null as MediaMetadata | null,
+      playbackState: 'none',
+      setActionHandler: (action: string, handler: MediaSessionActionHandler | null) => {
+        handlers.set(action, handler);
+      },
+      setPositionState: () => {},
+    };
+    Object.defineProperty(navigator, 'mediaSession', { value: mediaSession, configurable: true });
+    globalThis.MediaMetadata ??= class {
+      constructor(init: MediaMetadataInit) {
+        Object.assign(this, init);
+      }
+    } as unknown as typeof MediaMetadata;
+    return {
+      handlers,
+      mediaSession,
+      restore: () => Reflect.deleteProperty(navigator, 'mediaSession'),
+    };
+  }
+
+  it('routes OS controls to the queue that is playing, not the last one created', async () => {
+    const { handlers, mediaSession, restore } = stubMediaSession();
+    try {
+      mockFetchSuccess();
+      const a = new Queue({ tracks: ['a.mp3'], trackMetadata: [{ title: 'A' }] });
+      const b = new Queue({ tracks: ['b.mp3'], trackMetadata: [{ title: 'B' }] });
+
+      // b was constructed last, so it holds the handlers until a plays.
+      a.play();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(a.isPlaying).toBe(true);
+      expect((mediaSession.metadata as unknown as { title: string }).title).toBe('A');
+
+      handlers.get('pause')!({ action: 'pause' });
+      expect(a.isPlaying).toBe(false);
+
+      // Once b plays, the controls follow it.
+      b.play();
+      await new Promise((r) => setTimeout(r, 0));
+      handlers.get('pause')!({ action: 'pause' });
+      expect(b.isPlaying).toBe(false);
+
+      a.destroy();
+      b.destroy();
+    } finally {
+      restore();
+    }
+  });
+});

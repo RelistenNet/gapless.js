@@ -7,7 +7,9 @@
 
 import type { TrackMetadata } from '../types';
 
-const hasMediaSession = typeof navigator !== 'undefined' && 'mediaSession' in navigator;
+// Checked per call rather than once at import, so environments that add it
+// later (and tests that stub it) are picked up.
+const hasMediaSession = () => typeof navigator !== 'undefined' && 'mediaSession' in navigator;
 
 export interface MediaSessionHandlers {
   onPlay: () => void;
@@ -17,9 +19,13 @@ export interface MediaSessionHandlers {
   onSeek: (time: number) => void;
 }
 
-/** Register Media Session action handlers. Call once after construction. */
+/**
+ * Register Media Session action handlers. The handlers are global to the page,
+ * so the last caller wins. Queue calls this on construction and again whenever
+ * it starts playing, so the playing queue always owns the OS controls.
+ */
 export function setupMediaSession(handlers: MediaSessionHandlers): void {
-  if (!hasMediaSession) return;
+  if (!hasMediaSession()) return;
   const { mediaSession } = navigator;
   mediaSession.setActionHandler('play', handlers.onPlay);
   mediaSession.setActionHandler('pause', handlers.onPause);
@@ -32,7 +38,7 @@ export function setupMediaSession(handlers: MediaSessionHandlers): void {
 
 /** Update the OS metadata display (title, artist, album, artwork). */
 export function updateMediaSessionMetadata(metadata?: TrackMetadata): void {
-  if (!hasMediaSession) return;
+  if (!hasMediaSession()) return;
   if (!metadata) {
     navigator.mediaSession.metadata = null;
     return;
@@ -47,7 +53,7 @@ export function updateMediaSessionMetadata(metadata?: TrackMetadata): void {
 
 /** Sync the OS playback state indicator (playing / paused). */
 export function updateMediaSessionPlaybackState(isPlaying: boolean): void {
-  if (!hasMediaSession) return;
+  if (!hasMediaSession()) return;
   navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
 }
 
@@ -57,7 +63,7 @@ export function updateMediaSessionPositionState(
   position: number,
   playbackRate = 1
 ): void {
-  if (!hasMediaSession) return;
+  if (!hasMediaSession()) return;
   try {
     navigator.mediaSession.setPositionState({ duration, position, playbackRate });
   } catch {

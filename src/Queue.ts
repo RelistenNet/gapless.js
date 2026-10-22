@@ -218,8 +218,13 @@ export class Queue implements TrackQueueRef {
 
     this._actor = createActor(machine);
 
+    let wasPlaying = false;
     this._actor.subscribe((snapshot) => {
       const playing = snapshot.value === 'playing';
+      // Media Session handlers are page-global. With several queues on one
+      // page, the one that starts playing takes over the OS controls.
+      if (playing && !wasPlaying) this._claimMediaSession();
+      wasPlaying = playing;
       updateMediaSessionPlaybackState(playing);
       if (playing) {
         this._startMediaSessionAnchor();
@@ -230,15 +235,24 @@ export class Queue implements TrackQueueRef {
 
     this._actor.start();
 
-    setupMediaSession({
-      onPlay: () => this.play(),
-      onPause: () => {
-        if (this._actor.getSnapshot().value === 'playing') this.pause();
-      },
-      onNext: () => this.next(),
-      onPrevious: () => this.previous(),
-      onSeek: (t) => this.seek(t),
-    });
+    setupMediaSession(this._mediaSessionHandlers);
+  }
+
+  private readonly _mediaSessionHandlers = {
+    onPlay: () => this.play(),
+    onPause: () => {
+      if (this._actor.getSnapshot().value === 'playing') this.pause();
+    },
+    onNext: () => this.next(),
+    onPrevious: () => this.previous(),
+    onSeek: (t: number) => this.seek(t),
+  };
+
+  /** Point the OS media controls and metadata at this queue. */
+  private _claimMediaSession(): void {
+    setupMediaSession(this._mediaSessionHandlers);
+    const cur = this._currentTrack;
+    if (cur) updateMediaSessionMetadata(cur.metadata);
   }
 
   // --------------------------------------------------------------------------
