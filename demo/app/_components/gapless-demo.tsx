@@ -3,7 +3,7 @@
 import type { TrackInfo } from 'gapless';
 import { useGapless } from './use-gapless';
 import { CLIPS, CLIP_SECONDS } from './clips';
-import { Waveform } from './waveform';
+import { TrackBrackets, Waveform } from './waveform';
 import { formatTime } from './tracks';
 import { PauseIcon, PlayIcon } from './icons';
 import { StageBadge, type Tone } from './ui';
@@ -83,25 +83,25 @@ export function GaplessDemo() {
               ? [[i * CLIP_SECONDS, (i + 1) * CLIP_SECONDS] as const]
               : []
           )}
-          marker={{
-            label: !lastHandoff ? 'gap' : lastHandoff.gapless ? 'no gap' : 'gap',
-            tone: lastHandoff && !lastHandoff.gapless ? 'bad' : 'good',
-          }}
+          seamless={!lastHandoff || lastHandoff.gapless}
+          marker={
+            !lastHandoff || lastHandoff.gapless
+              ? { label: 'gapless', tone: 'good' }
+              : { label: 'gap', tone: 'bad' }
+          }
         />
 
-        <div className="mt-3 grid grid-cols-2 gap-1">
-          {CLIPS.map((clip, i) => (
-            <div
-              key={clip.url}
-              className={`flex items-center gap-2 ${i === 1 ? 'justify-end' : ''}`}
-            >
+        <TrackBrackets
+          seamless={!lastHandoff || lastHandoff.gapless}
+          labels={CLIPS.map((clip, i) => (
+            <div key={clip.url} className="flex items-center gap-2">
               <p className="font-mono text-xs/5 whitespace-nowrap text-zinc-600 max-sm:hidden dark:text-zinc-400">
                 {clip.title}
               </p>
               <StageBadge stage={stage(tracks[i], i === idx)} />
             </div>
           ))}
-        </div>
+        />
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
@@ -110,13 +110,13 @@ export function GaplessDemo() {
           {lastHandoff ? (
             lastHandoff.gapless ? (
               <p className="text-emerald-700 dark:text-emerald-400">
-                <span className="font-semibold">Gapless.</span> part-2.wav started on the exact
-                sample part-1.wav ended.
+                <span className="font-semibold">Gapless.</span> “Fire on the Mountain” started on
+                the exact sample “Scarlet Begonias” ended.
               </p>
             ) : (
               <p className="text-amber-700 dark:text-amber-400">
-                <span className="font-semibold">Not gapless.</span> part-2.wav wasn’t decoded in
-                time, so it fell back to HTML5. Replay the transition.
+                <span className="font-semibold">Not gapless.</span> “Fire on the Mountain” wasn’t
+                decoded in time, so it fell back to HTML5. Replay the transition.
               </p>
             )
           ) : (

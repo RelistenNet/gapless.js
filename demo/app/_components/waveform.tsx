@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties, MouseEvent } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { CLIP_SECONDS, PEAKS } from './clips';
 
 const TOTAL = CLIP_SECONDS * PEAKS.length;
@@ -15,6 +15,7 @@ export function Waveform({
   showPlayhead,
   onSeek,
   marker,
+  seamless = false,
   buffered = [],
   className = 'h-20',
 }: {
@@ -24,6 +25,8 @@ export function Waveform({
   onSeek: (seconds: number) => void;
   /** The line between the two files, and what to say about it. */
   marker: { label: string; tone: 'good' | 'bad' };
+  /** Join the two panels with no space between them, telling them apart by tint. */
+  seamless?: boolean;
   /** Buffered ranges in combined seconds, drawn brighter than unloaded audio. */
   buffered?: readonly (readonly [number, number])[];
   className?: string;
@@ -46,7 +49,7 @@ export function Waveform({
         if (e.key === 'ArrowRight') onSeek(Math.min(TOTAL - 0.5, position + 2));
         if (e.key === 'ArrowLeft') onSeek(Math.max(0, position - 2));
       }}
-      className={`relative grid cursor-pointer grid-cols-2 gap-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zinc-950 dark:focus-visible:outline-white ${className}`}
+      className={`relative grid cursor-pointer grid-cols-2 ${seamless ? '' : 'gap-2'} focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-zinc-950 dark:focus-visible:outline-white ${className}`}
     >
       {PEAKS.map((peaks, clip) => {
         const start = clip * CLIP_SECONDS;
@@ -58,7 +61,16 @@ export function Waveform({
           );
         };
         return (
-          <div key={clip} className="flex rounded-md bg-zinc-950/4 px-1.5 dark:bg-white/4">
+          <div
+            key={clip}
+            className={`flex ${
+              !seamless
+                ? 'rounded-md bg-zinc-950/4 px-1.5 dark:bg-white/4'
+                : clip === 0
+                  ? 'rounded-l-md bg-zinc-950/4 pr-px pl-1.5 dark:bg-white/4'
+                  : 'rounded-r-md bg-zinc-950/8 pr-1.5 dark:bg-white/8'
+            }`}
+          >
             <div
               onClick={onClick}
               className="relative flex flex-1 items-center gap-px"
@@ -93,10 +105,41 @@ export function Waveform({
         className={`pointer-events-none absolute -inset-y-2 left-1/2 w-0.5 -translate-x-1/2 rounded-full ${markerColor[0]}`}
       />
       <div
-        className={`pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 font-mono text-xs/5 font-medium whitespace-nowrap ${markerColor[1]}`}
+        className={`pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 font-mono text-xs/5 font-medium whitespace-nowrap ${markerColor[1]}`}
       >
         {marker.label}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A bracket under each clip's half of the waveform, with a stem down to its
+ * label, so the strip reads as two tracks. Spacing matches `Waveform`'s
+ * panels: pass `seamless` when the waveform does.
+ */
+export function TrackBrackets({
+  labels,
+  seamless = false,
+  small = false,
+}: {
+  labels: readonly ReactNode[];
+  seamless?: boolean;
+  small?: boolean;
+}) {
+  const line = 'border-zinc-950/20 dark:border-white/20';
+  return (
+    <div className={`grid grid-cols-2 ${seamless ? '' : 'gap-2'} ${small ? 'mt-1.5' : 'mt-2'}`}>
+      {labels.map((label, i) => (
+        <div key={i} className="flex min-w-0 flex-col items-center">
+          <div
+            aria-hidden
+            className={`mx-0.5 self-stretch rounded-b-xs border-x border-b ${line} ${small ? 'h-1' : 'h-1.5'}`}
+          />
+          <div aria-hidden className={`w-px border-l ${line} ${small ? 'h-1' : 'h-2'}`} />
+          {label}
+        </div>
+      ))}
     </div>
   );
 }

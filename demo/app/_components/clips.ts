@@ -9,8 +9,8 @@ import type { DemoTrack } from './tracks';
 export const CLIP_SECONDS = 5;
 
 export const CLIPS: DemoTrack[] = [
-  { url: '/clips/part-1.wav', title: 'part-1.wav' },
-  { url: '/clips/part-2.wav', title: 'part-2.wav' },
+  { url: '/clips/part-1.wav', title: 'Scarlet Begonias' },
+  { url: '/clips/part-2.wav', title: 'Fire on the Mountain' },
 ];
 
 /** Normalized peak amplitude, 64 buckets per clip. */

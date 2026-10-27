@@ -4,7 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { CLIPS, CLIP_SECONDS } from './clips';
 import { formatTime } from './tracks';
 import { PauseIcon, PlayIcon } from './icons';
-import { Waveform } from './waveform';
+import { TrackBrackets, Waveform } from './waveform';
 import { claimPlayback, registerPlayer } from './exclusive-playback';
 
 interface NativeSnapshot {
@@ -231,14 +231,27 @@ export function NativeDemo() {
         </p>
       </div>
       <div className="flex min-w-0 basis-full items-center gap-4 pt-4 sm:basis-0 sm:flex-1 sm:pt-0">
-        <Waveform
-          className="h-10 min-w-0 flex-1"
-          position={position}
-          showPlayhead={started}
-          onSeek={store.seek}
-          buffered={buffered}
-          marker={{ label: gapMs === null ? 'gap' : `${gapMs} ms gap`, tone: 'bad' }}
-        />
+        <div className="min-w-0 flex-1">
+          <Waveform
+            className="h-10"
+            position={position}
+            showPlayhead={started}
+            onSeek={store.seek}
+            buffered={buffered}
+            marker={{ label: gapMs === null ? 'gap' : `${gapMs} ms gap`, tone: 'bad' }}
+          />
+          <TrackBrackets
+            small
+            labels={CLIPS.map((clip) => (
+              <p
+                key={clip.url}
+                className="max-w-full truncate font-mono text-[0.6875rem]/4 text-zinc-500 dark:text-zinc-400"
+              >
+                {clip.title}
+              </p>
+            ))}
+          />
+        </div>
         <button
           type="button"
           onClick={() => store.seek(CLIP_SECONDS - 3)}
