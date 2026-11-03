@@ -36,7 +36,7 @@ export default function Home() {
             and functionality requirements.
           </p>
 
-          <p>Here's a demo:</p>
+          <p>Here&apos;s a demo:</p>
         </div>
         <p className="flex items-center gap-2 font-semibold text-zinc-500 dark:text-zinc-400">
           Plain <code className="font-mono">{`<audio />`}</code> tags (non-library)
