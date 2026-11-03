@@ -1,9 +1,9 @@
-import { NativeDemo } from './_components/native-demo';
-import { GaplessDemo } from './_components/gapless-demo';
-import { FullShow } from './_components/player';
-import { SiteHeader } from './_components/site-header';
-import { StageBadge } from './_components/ui';
-import { CodeBlock } from './_components/code';
+import { NativeDemo } from "./_components/native-demo";
+import { GaplessDemo } from "./_components/gapless-demo";
+import { FullShow } from "./_components/player";
+import { SiteHeader } from "./_components/site-header";
+import { StageBadge } from "./_components/ui";
+import { CodeBlock } from "./_components/code";
 
 export default function Home() {
   return (
@@ -14,7 +14,7 @@ export default function Home() {
           <p>
             gapless.js is a javascript library for playing back a queue of audio files without gaps
             between tracks. It was specifically designed to suit our needs in listening to recorded
-            concerts over at
+            concerts over at{" "}
             <a href="https://relisten.net" className="underline underline-offset-4">
               https://relisten.net
             </a>
@@ -30,20 +30,22 @@ export default function Home() {
 
           <p>
             This library is over a decade old at this point, though it was completely re-written
-            from scratch in the past year. It takes inspiration from{' '}
+            from scratch in the past year. It takes inspiration from{" "}
             <a href="https://github.com/regosen/Gapless-5">Gapless 5 by Rego Sen</a>, who pioneered
             these techniques on the web. We wrote our own after we had slightly different use-cases
             and functionality requirements.
           </p>
+
+          <p>Here's a demo:</p>
         </div>
         <p className="flex items-center gap-2 font-semibold text-zinc-500 dark:text-zinc-400">
           Plain <code className="font-mono">{`<audio />`}</code> tags (non-library)
-          <StageBadge stage={{ tone: 'warn', label: 'Not gapless' }} />
+          <StageBadge stage={{ tone: "warn", label: "Not gapless" }} />
         </p>
         <NativeDemo />
         <p className="flex items-center gap-2 font-semibold text-zinc-600 dark:text-zinc-100">
           gapless.js
-          <StageBadge stage={{ tone: 'good', label: 'Gapless' }} />
+          <StageBadge stage={{ tone: "good", label: "Gapless" }} />
         </p>
         <GaplessDemo />
         <p className="font-semibold text-zinc-600 dark:text-zinc-100 flex gap-2">
@@ -70,7 +72,7 @@ playButton.addEventListener('click', () => player.togglePlayPause());
 `}</CodeBlock>
           <p className="text-sm/6 text-zinc-600 dark:text-zinc-400">
             gapless.js preloads and decodes upcoming tracks in the background and starts each one on
-            the exact sample the previous one ends. Bring your own UI.{' '}
+            the exact sample the previous one ends. Bring your own UI.{" "}
             <a href="/docs" className="font-medium text-zinc-950 dark:text-white">
               Read the full docs →
             </a>
