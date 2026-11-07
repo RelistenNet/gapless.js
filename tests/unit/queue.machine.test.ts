@@ -121,10 +121,19 @@ describe('QueueMachine', () => {
       expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
     });
 
-    it('jumps to GOTO index', () => {
+    it('jumps to GOTO index and keeps playing with playImmediately', () => {
+      const a = actorFrom(makeCtx(), 'playing');
+      a.send({ type: 'GOTO', index: 2, playImmediately: true });
+      expect(a.getSnapshot().value).toBe('playing');
+      expect(a.getSnapshot().context.currentTrackIndex).toBe(2);
+    });
+
+    it('jumps to GOTO index and pauses without playImmediately', () => {
+      // The old track is deactivated and the new one isn't started, so the
+      // queue is paused, not 'playing' with nothing playing.
       const a = actorFrom(makeCtx(), 'playing');
       a.send({ type: 'GOTO', index: 2 });
-      expect(a.getSnapshot().value).toBe('playing');
+      expect(a.getSnapshot().value).toBe('paused');
       expect(a.getSnapshot().context.currentTrackIndex).toBe(2);
     });
 

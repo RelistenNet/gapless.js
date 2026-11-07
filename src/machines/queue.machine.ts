@@ -291,6 +291,11 @@ export function createQueueMachine(initialContext: QueueContext) {
               ],
             },
             {
+              // Going to a track without playing it stops the old one, so the
+              // queue is paused on the new one (as from idle or ended). Staying
+              // in 'playing' left nothing playing, with no PLAY handler to
+              // recover.
+              target: 'paused',
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',

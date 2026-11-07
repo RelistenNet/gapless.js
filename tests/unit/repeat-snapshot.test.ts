@@ -316,3 +316,29 @@ describe('review fixes', () => {
     expect(q.keys).toEqual(['a', 'b']);
   });
 });
+
+describe('going to an entry without playing, while playing', () => {
+  it('setEntries({ play: false }) that drops the current entry pauses on the new one', () => {
+    const { q, internal } = queueOf(['a', 'b']);
+    q.play();
+    q.setEntries(['x', 'y'].map(entry), { startKey: 'y', play: false });
+    expect(q.currentKey).toBe('y');
+    expect(q.queueSnapshot.state).toBe('paused');
+    expect(q.isPlaying).toBe(false);
+    // …and play() recovers.
+    q.play();
+    expect(q.isPlaying).toBe(true);
+    expect(internal._currentTrack.isPlaying).toBe(true);
+  });
+
+  it('gotoTrack(i, false) pauses on the new track (pre-existing path)', () => {
+    const { q, internal } = queueOf(['a', 'b']);
+    q.play();
+    q.gotoTrack(1, false);
+    expect(q.currentKey).toBe('b');
+    expect(q.queueSnapshot.state).toBe('paused');
+    expect(internal._tracks[0].isPlaying).toBe(false);
+    q.play();
+    expect(internal._currentTrack.isPlaying).toBe(true);
+  });
+});
