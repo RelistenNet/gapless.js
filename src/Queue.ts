@@ -600,6 +600,8 @@ export class Queue implements TrackQueueRef {
     const snap = this._actor.getSnapshot();
     if (snap.value === 'playing') {
       this._preloadAhead(snap.context.currentTrackIndex);
+    } else {
+      this._cancelPreloadsOutsideWindow(snap.context.currentTrackIndex);
     }
   }
 
@@ -700,6 +702,10 @@ export class Queue implements TrackQueueRef {
     if (nextChanged && this.isPlaying) {
       this._preloadAhead(curIndex);
       this._tryScheduleGapless(curIndex);
+    } else {
+      // "Next" is unchanged, but a move can still push a downloading track
+      // out of the window.
+      this._cancelPreloadsOutsideWindow(curIndex);
     }
   }
 
@@ -731,6 +737,8 @@ export class Queue implements TrackQueueRef {
     if (snap.value === 'playing') {
       this._preloadAhead(snap.context.currentTrackIndex);
       this._tryScheduleGapless(snap.context.currentTrackIndex);
+    } else {
+      this._cancelPreloadsOutsideWindow(snap.context.currentTrackIndex);
     }
   }
 
@@ -837,7 +845,27 @@ export class Queue implements TrackQueueRef {
     return this._tracks[this._actor.getSnapshot().context.currentTrackIndex];
   }
 
+  /**
+   * Abort downloads for tracks that are no longer in the preload window (the
+   * current track plus the next preloadNumTracks in play order), so they don't
+   * compete with the tracks that are about to play. Decoded buffers are kept.
+   */
+  private _cancelPreloadsOutsideWindow(fromIndex: number): void {
+    const window = new Set<number>([fromIndex]);
+    for (
+      let step = 1, i = this._nextIndexOf(fromIndex);
+      step <= this._preloadNumTracks && i !== -1 && i !== fromIndex;
+      step++, i = this._nextIndexOf(i)
+    ) {
+      window.add(i);
+    }
+    for (let i = 0; i < this._tracks.length; i++) {
+      if (!window.has(i)) this._tracks[i].cancelPreload();
+    }
+  }
+
   private _preloadAhead(fromIndex: number): void {
+    this._cancelPreloadsOutsideWindow(fromIndex);
     const cur = this._trackAt(fromIndex);
 
     // Bandwidth-contention gate: while the current track is playing via HTML5

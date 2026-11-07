@@ -465,6 +465,9 @@ export function createQueueMachine(initialContext: QueueContext) {
                 'advanceOnTrackEnd',
                 'notifyStartNewTrack',
                 'updateMediaSessionMetadata',
+                // Like every other move to a new track: preload what's ahead
+                // of it, and abort downloads that no longer are.
+                'preloadAhead',
               ],
             },
             {

@@ -170,6 +170,36 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
     ).toBe(expected);
   }
 
+  // 11e. No track outside the preload window (current + next preloadNumTracks
+  // in play order) is still downloading: displaced downloads are aborted.
+  // Decoding is allowed to finish (the bytes are already here).
+  if (trackCount > 0 && snap.state !== 'ended') {
+    const inWindow = new Set<number>([snap.context.currentTrackIndex]);
+    const q = queue as unknown as { _nextIndexOf(i: number): number };
+    for (
+      let step = 1, i = q._nextIndexOf(snap.context.currentTrackIndex);
+      step <= queue.preloadNumTracks && i !== -1 && i !== snap.context.currentTrackIndex;
+      step++, i = q._nextIndexOf(i)
+    ) {
+      inWindow.add(i);
+    }
+    const all = tracks as unknown as {
+      key: string;
+      webAudioLoadingState: string;
+      _actor: {
+        getSnapshot(): { children: Record<string, { getSnapshot(): { value: unknown } }> };
+      };
+    }[];
+    all.forEach((t, i) => {
+      if (inWindow.has(i) || t.webAudioLoadingState !== 'LOADING') return;
+      const stage = t._actor.getSnapshot().children.fetchDecode?.getSnapshot().value;
+      expect(
+        stage === 'resolvingUrl' || stage === 'fetching',
+        `${label}: track ${i} (${t.key}) is outside the window but still downloading (${String(stage)})`
+      ).toBe(false);
+    });
+  }
+
   // 11d. The machine agrees on the repeat mode.
   expect(
     (snap.context as { repeat?: string }).repeat ?? 'off',
@@ -419,9 +449,42 @@ const EDIT_WEIGHTS: Weights = {
  * scheduled between edits. Time advances randomly; async work settles
  * between ops.
  */
+/**
+ * fetch mock whose GETs take a seeded random 0–12 event-loop ticks, so many
+ * downloads are still in flight when the next edit lands (the fuzz settles 3
+ * ticks per op). Aborts reject, as real fetch does.
+ */
+function mockFetchSlow(seed: number): void {
+  const rand = mulberry32(seed ^ 0x5eed);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((_url: string, init?: RequestInit) => {
+      const ticks = Math.floor(rand() * 13);
+      return new Promise((resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        const step = (n: number) => {
+          if (signal?.aborted) return;
+          if (n === 0) {
+            return resolve({
+              ok: true,
+              url: '',
+              redirected: false,
+              arrayBuffer: () => Promise.resolve(new ArrayBuffer(1024)),
+            });
+          }
+          setTimeout(() => step(n - 1), 0);
+        };
+        step(ticks);
+      });
+    })
+  );
+}
+
 async function runAsyncEditFuzz(seed: number, initialTracks: number, numOps: number) {
   trackCounter = 0;
-  mockFetchSuccess();
+  mockFetchSlow(seed);
   const rand = mulberry32(seed);
   const queue = new Queue();
   queue.setEntries(Array.from({ length: initialTracks }, () => newEntry()));
@@ -458,8 +521,9 @@ describe('Fuzz: key-based edits', () => {
   describe('K: Edits while gapless is scheduled (HYBRID, async, 8 tracks, 400 ops)', () => {
     it.each(SEEDS)('seed %i', async (seed) => {
       const scheduledSeen = await runAsyncEditFuzz(seed, 8, 400);
-      // The scenario is only meaningful if gapless starts actually got scheduled.
-      expect(scheduledSeen).toBeGreaterThan(20);
+      // The scenario is only meaningful if gapless starts actually got
+      // scheduled. With slow downloads that's ~10–60 times in 400 ops.
+      expect(scheduledSeen).toBeGreaterThan(5);
     });
   });
 });

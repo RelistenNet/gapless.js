@@ -407,6 +407,25 @@ export class Track {
     }
   }
 
+  /**
+   * Abort an in-flight Web Audio download, so the track can be preloaded again
+   * later from scratch. Only while the URL is being resolved or the file
+   * fetched: once decoding starts the bytes are already here, and the decode
+   * (which assigns audioBuffer itself) can't be aborted. Returns whether a
+   * download was cancelled.
+   */
+  cancelPreload(): boolean {
+    const snap = this._actor.getSnapshot();
+    if (snap.context.webAudioLoadingState !== 'LOADING' || snap.context.isPlaying) return false;
+    const child = snap.children.fetchDecode as { getSnapshot(): { value: unknown } } | undefined;
+    const stage = child?.getSnapshot().value;
+    if (stage !== 'resolvingUrl' && stage !== 'fetching') return false;
+    this.queueRef.onDebug(`cancelPreload() track=${this.index} stage=${String(stage)}`);
+    this._pendingArrayBuffer = null;
+    this._actor.send({ type: 'CANCEL_PRELOAD' });
+    return true;
+  }
+
   activate(): void {
     this._actor.send({ type: 'ACTIVATE' });
   }

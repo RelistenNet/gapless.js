@@ -29,7 +29,7 @@
 //   for Web Audio on re-play.
 // ---------------------------------------------------------------------------
 
-import { setup, assign, spawnChild } from 'xstate';
+import { setup, assign, spawnChild, stopChild } from 'xstate';
 import { fetchDecodeMachine } from './fetchDecode.machine';
 import type { WebAudioLoadingState, PlaybackType } from '../types';
 
@@ -69,6 +69,8 @@ export type TrackEvent =
   | { type: 'WEBAUDIO_ENDED' }
   | { type: 'URL_RESOLVED'; url: string }
   | { type: 'START_FETCH' }
+  // Abort an in-flight fetch (sent by Track only before decoding starts).
+  | { type: 'CANCEL_PRELOAD' }
   | { type: 'SCHEDULE_GAPLESS'; when: number }
   | { type: 'CANCEL_GAPLESS' }
   | { type: 'LOOKAHEAD_REACHED' };
@@ -85,6 +87,8 @@ export function createTrackMachine(initialContext: TrackContext) {
       fetchDecode: fetchDecodeMachine,
     },
     guards: {
+      canCancelPreload: ({ context }) =>
+        context.webAudioLoadingState === 'LOADING' && !context.isPlaying,
       canPlayWebAudio: () => false,
       isWebAudioOnly: () => false,
       canStartFetch: ({ context }) =>
@@ -156,6 +160,11 @@ export function createTrackMachine(initialContext: TrackContext) {
       clearNotifiedLookahead: assign({
         notifiedLookahead: () => false,
       }),
+      stopFetch: stopChild('fetchDecode'),
+      resetLoadingState: assign({
+        webAudioLoadingState: () => 'NONE' as WebAudioLoadingState,
+        fetchStarted: () => false,
+      }),
     },
   }).createMachine({
     id: 'track',
@@ -179,6 +188,12 @@ export function createTrackMachine(initialContext: TrackContext) {
             }),
           }),
         ],
+      },
+      // Stopping the child aborts its fetch. Never for a playing track: its
+      // decode is what lets it cross over to Web Audio.
+      CANCEL_PRELOAD: {
+        guard: 'canCancelPreload',
+        actions: ['stopFetch', 'resetLoadingState'],
       },
     },
 
@@ -352,6 +367,11 @@ export function createTrackMachine(initialContext: TrackContext) {
       // -----------------------------------------------------------------
       loading: {
         on: {
+          CANCEL_PRELOAD: {
+            guard: 'canCancelPreload',
+            target: 'idle',
+            actions: ['stopFetch', 'resetLoadingState'],
+          },
           SEEK: {
             actions: ['setSeekTarget', 'reportProgress'],
           },
