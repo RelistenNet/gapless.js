@@ -45,8 +45,13 @@ const PRELOAD_DELAY = 15;
  */
 const CROSSOVER_FADE_SEC = 0.03;
 
+let _autoKey = 0;
+
 export class Track {
-  readonly index: number;
+  /** Position in the queue's play order. Reassigned by Queue when the order changes. */
+  index: number;
+  /** Stable identity across reorders. */
+  readonly key: string;
   readonly metadata: TrackMetadata;
 
   private _trackUrl: string;
@@ -143,10 +148,12 @@ export class Track {
     trackUrl: string;
     index: number;
     queue: TrackQueueRef;
+    key?: string;
     skipHEAD?: boolean;
     metadata?: TrackMetadata;
   }) {
     this.index = opts.index;
+    this.key = opts.key ?? `gapless-${++_autoKey}`;
     this._trackUrl = opts.trackUrl;
     this._resolvedUrl = opts.trackUrl;
     this.skipHEAD = opts.skipHEAD ?? false;
@@ -538,6 +545,7 @@ export class Track {
   toInfo(): TrackInfo {
     return {
       index: this.index,
+      key: this.key,
       currentTime: this.currentTime,
       duration: this.duration,
       isPlaying: this.isPlaying,

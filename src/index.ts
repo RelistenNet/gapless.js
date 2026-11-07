@@ -6,6 +6,8 @@ export { Queue } from './Queue';
 export type {
   GaplessOptions,
   AddTrackOptions,
+  Entry,
+  Position,
   TrackInfo,
   TrackMetadata,
   PlaybackType,

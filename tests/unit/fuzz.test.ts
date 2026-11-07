@@ -11,7 +11,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { Queue } from '../../src/Queue';
 import type { Track } from '../../src/Track';
-import { mockFetchSuccess, mockFetchFailure } from '../setup';
+import { mockFetchSuccess, mockFetchFailure, advanceTime } from '../setup';
 
 // ---------------------------------------------------------------------------
 // Seeded PRNG — mulberry32
@@ -45,7 +45,14 @@ type OpName =
   | 'setVolume'
   | 'bigJump'
   | 'networkFail'
-  | 'networkRestore';
+  | 'networkRestore'
+  | 'insertAfterCurrent'
+  | 'insertRandom'
+  | 'moveRandom'
+  | 'moveCurrent'
+  | 'removeKey'
+  | 'reorderAll'
+  | 'replaceAll';
 
 type Weights = Partial<Record<OpName, number>>;
 
@@ -141,6 +148,20 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
     queue.tracks.length,
     `${label}: public tracks.length ${queue.tracks.length} != internal ${trackCount}`
   ).toBe(trackCount);
+
+  // 11b. The scheduled gapless track (if any) is still in the queue, and is
+  // the track right after the current one — never a stale or reordered one.
+  const scheduled = (queue as unknown as { _scheduledNext: unknown })._scheduledNext;
+  if (scheduled !== null) {
+    expect(
+      tracks.indexOf(scheduled as { index: number }),
+      `${label}: scheduled track is not at currentTrackIndex + 1`
+    ).toBe(snap.context.currentTrackIndex + 1);
+  }
+
+  // 11c. Keys are unique.
+  const keys = queue.keys;
+  expect(new Set(keys).size, `${label}: duplicate keys ${keys.join(',')}`).toBe(keys.length);
 
   // 11. _scheduledNextIndex (if set) should be in bounds
   const scheduledIdx = (queue as unknown as { _scheduledNextIndex: number | null })
@@ -245,7 +266,69 @@ function executeOp(queue: Queue, op: OpName, rand: () => number): string {
       mockFetchSuccess();
       return 'networkRestore()';
     }
+    case 'insertAfterCurrent': {
+      const n = 1 + Math.floor(rand() * 3);
+      const entries = Array.from({ length: n }, () => newEntry());
+      queue.insert(entries, { after: 'current' });
+      return `insert(${entries.map((e) => e.key)}, after current)`;
+    }
+    case 'insertRandom': {
+      const keys = queue.keys;
+      const after = keys.length ? keys[Math.floor(rand() * keys.length)] : 'end';
+      const e = newEntry();
+      queue.insert([e], { after });
+      return `insert(${e.key}, after ${after})`;
+    }
+    case 'moveRandom': {
+      const keys = queue.keys;
+      if (keys.length < 2) return 'move(skip)';
+      const key = keys[Math.floor(rand() * keys.length)];
+      const after = rand() < 0.2 ? 'start' : keys[Math.floor(rand() * keys.length)];
+      queue.move(key, { after });
+      return `move(${key}, after ${after})`;
+    }
+    case 'moveCurrent': {
+      const keys = queue.keys;
+      const cur = queue.currentKey;
+      if (!cur || keys.length < 2) return 'moveCurrent(skip)';
+      const after = keys[Math.floor(rand() * keys.length)];
+      queue.move(cur, { after });
+      return `move(current ${cur}, after ${after})`;
+    }
+    case 'removeKey': {
+      const keys = queue.keys;
+      if (!keys.length) return 'removeKey(skip)';
+      const key = keys[Math.floor(rand() * keys.length)];
+      queue.remove(key);
+      return `remove(${key})`;
+    }
+    case 'reorderAll': {
+      // Shuffle, keeping every key: the current track must survive untouched.
+      const keys = queue.keys;
+      for (let i = keys.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [keys[i], keys[j]] = [keys[j], keys[i]];
+      }
+      queue.setEntries(keys.map((key) => ({ key, url: `${key}.mp3` })));
+      return `setEntries(shuffled ${keys.length})`;
+    }
+    case 'replaceAll': {
+      // Keep a random subset (maybe dropping the current track) plus new entries.
+      const kept = queue.keys.filter(() => rand() < 0.5);
+      const added = Array.from({ length: Math.floor(rand() * 4) }, () => newEntry());
+      const entries = [...kept.map((key) => ({ key, url: `${key}.mp3` })), ...added];
+      const startKey = entries.length
+        ? entries[Math.floor(rand() * entries.length)].key
+        : undefined;
+      queue.setEntries(entries, { startKey });
+      return `setEntries(${entries.map((e) => e.key)}, start ${startKey})`;
+    }
   }
+}
+
+function newEntry() {
+  trackCounter++;
+  return { key: `k${trackCounter}`, url: `fuzz-entry-${trackCounter}.mp3` };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +368,73 @@ const SEEDS = [42, 1337, 99999, 314159, 271828];
 // ---------------------------------------------------------------------------
 // Scenarios
 // ---------------------------------------------------------------------------
+
+const EDIT_WEIGHTS: Weights = {
+  next: 2,
+  previous: 1,
+  gotoTrack: 1,
+  play: 2,
+  pause: 1,
+  seek: 1,
+  trackEnded: 2,
+  insertAfterCurrent: 2,
+  insertRandom: 1,
+  moveRandom: 2,
+  moveCurrent: 1,
+  removeKey: 1,
+  reorderAll: 1,
+  replaceAll: 1,
+};
+
+/**
+ * HYBRID mode with real (mocked) decodes, so gapless starts actually get
+ * scheduled between edits. Time advances randomly; async work settles
+ * between ops.
+ */
+async function runAsyncEditFuzz(seed: number, initialTracks: number, numOps: number) {
+  trackCounter = 0;
+  mockFetchSuccess();
+  const rand = mulberry32(seed);
+  const queue = new Queue();
+  queue.setEntries(Array.from({ length: initialTracks }, () => newEntry()));
+  let scheduledSeen = 0;
+  try {
+    for (let i = 0; i < numOps; i++) {
+      const op = pickOp(rand, EDIT_WEIGHTS);
+      const desc = executeOp(queue, op, rand);
+      checkInvariants(queue, `op #${i}: ${desc}`, seed);
+      if (rand() < 0.5) advanceTime(rand() * 30);
+      for (let t = 0; t < 3; t++) await new Promise((r) => setTimeout(r, 0));
+      checkInvariants(queue, `op #${i}: ${desc} (settled)`, seed);
+      if ((queue as unknown as { _scheduledNext: unknown })._scheduledNext) scheduledSeen++;
+    }
+  } finally {
+    queue.destroy();
+  }
+  return scheduledSeen;
+}
+
+describe('Fuzz: key-based edits', () => {
+  describe('I: Edits interleaved with navigation (HTML5_ONLY, 10 tracks, 1000 ops)', () => {
+    it.each(SEEDS)('seed %i', (seed) => {
+      runFuzzScenario(seed, 10, 1000, EDIT_WEIGHTS);
+    });
+  });
+
+  describe('J: Edits from empty (HTML5_ONLY, 0 tracks, 500 ops)', () => {
+    it.each(SEEDS)('seed %i', (seed) => {
+      runFuzzScenario(seed, 0, 500, EDIT_WEIGHTS);
+    });
+  });
+
+  describe('K: Edits while gapless is scheduled (HYBRID, async, 8 tracks, 400 ops)', () => {
+    it.each(SEEDS)('seed %i', async (seed) => {
+      const scheduledSeen = await runAsyncEditFuzz(seed, 8, 400);
+      // The scenario is only meaningful if gapless starts actually got scheduled.
+      expect(scheduledSeen).toBeGreaterThan(20);
+    });
+  });
+});
 
 describe('Fuzz: navigation stress tests', () => {
   afterEach(() => {

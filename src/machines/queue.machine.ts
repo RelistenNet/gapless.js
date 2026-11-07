@@ -39,7 +39,10 @@ export type QueueEvent =
   | { type: 'ADD_TRACK' }
   | { type: 'REMOVE_TRACK'; index: number }
   | { type: 'TRACK_ENDED' }
-  | { type: 'TRACK_LOADED'; index: number };
+  | { type: 'TRACK_LOADED'; index: number }
+  // Reorder: the queue rearranged its tracks without changing which one is
+  // current. Assign-only; side effects are run by Queue._applyOrder.
+  | { type: 'SYNC'; currentTrackIndex: number; trackCount: number };
 
 // ---- Machine ---------------------------------------------------------------
 
@@ -92,6 +95,11 @@ export function createQueueMachine(initialContext: QueueContext) {
         currentTrackIndex: ({ context }) =>
           Math.min(context.currentTrackIndex + 1, context.trackCount - 1),
       }),
+      syncOrder: assign({
+        currentTrackIndex: ({ event }) =>
+          (event as { type: 'SYNC'; currentTrackIndex: number }).currentTrackIndex,
+        trackCount: ({ event }) => (event as { type: 'SYNC'; trackCount: number }).trackCount,
+      }),
       resetToFirstTrack: assign({
         currentTrackIndex: () => 0,
       }),
@@ -128,6 +136,14 @@ export function createQueueMachine(initialContext: QueueContext) {
       REMOVE_TRACK: {
         actions: 'decrementTrackCount',
       },
+      SYNC: [
+        {
+          guard: ({ event }) => (event as { type: 'SYNC'; trackCount: number }).trackCount === 0,
+          target: '.idle',
+          actions: 'syncOrder',
+        },
+        { actions: 'syncOrder' },
+      ],
     },
 
     states: {
@@ -426,6 +442,19 @@ export function createQueueMachine(initialContext: QueueContext) {
             target: 'paused',
             actions: 'incrementTrackCount',
           },
+          // Same rule as ADD_TRACK: once there's something after the current
+          // track again, the queue is no longer at its end.
+          SYNC: [
+            {
+              guard: ({ event }) => {
+                const e = event as { type: 'SYNC'; currentTrackIndex: number; trackCount: number };
+                return e.currentTrackIndex + 1 < e.trackCount;
+              },
+              target: 'paused',
+              actions: 'syncOrder',
+            },
+            { actions: 'syncOrder' },
+          ],
           PLAY: {
             target: 'playing',
             actions: [

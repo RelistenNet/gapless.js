@@ -73,7 +73,20 @@ export interface AddTrackOptions {
    */
   skipHEAD?: boolean;
   metadata?: TrackMetadata;
+  /** Stable identity for key-based edits. Generated when omitted. */
+  key?: string;
 }
+
+/** A queue entry for the key-based API. */
+export interface Entry {
+  key: string;
+  url: string;
+  metadata?: TrackMetadata;
+  skipHEAD?: boolean;
+}
+
+/** Where to place inserted or moved entries. */
+export type Position = { after: string | 'current' | 'start' | 'end' };
 
 /**
  * A plain-data snapshot of a track's current state.
@@ -83,6 +96,8 @@ export interface AddTrackOptions {
 export interface TrackInfo {
   /** Zero-based position of this track in the queue. */
   index: number;
+  /** Stable identity across reorders. */
+  key: string;
   /** Current playback position in seconds. */
   currentTime: number;
   /** Total duration in seconds (NaN until loaded). */
