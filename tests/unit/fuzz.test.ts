@@ -8,10 +8,13 @@
 // logged on failure so failing runs can be replayed.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { Queue } from '../../src/Queue';
 import type { Track } from '../../src/Track';
-import { mockFetchSuccess, mockFetchFailure } from '../setup';
+import { mockFetchSuccess, mockFetchFailure, advanceTime } from '../setup';
+
+// Fuzz runs take ~0.1–1.5 s per seed; leave headroom for loaded CI machines.
+vi.setConfig({ testTimeout: 30_000 });
 
 // ---------------------------------------------------------------------------
 // Seeded PRNG — mulberry32
@@ -45,7 +48,15 @@ type OpName =
   | 'setVolume'
   | 'bigJump'
   | 'networkFail'
-  | 'networkRestore';
+  | 'networkRestore'
+  | 'insertAfterCurrent'
+  | 'insertRandom'
+  | 'moveRandom'
+  | 'moveCurrent'
+  | 'removeKey'
+  | 'reorderAll'
+  | 'replaceAll'
+  | 'setRepeat';
 
 type Weights = Partial<Record<OpName, number>>;
 
@@ -66,39 +77,55 @@ function pickOp(rand: () => number, weights: Weights): OpName {
 
 function checkInvariants(queue: Queue, opDescription: string, seed: number): void {
   const snap = queue.queueSnapshot;
-  const tracks = (queue as unknown as { _tracks: { index: number }[] })._tracks;
+  type T = {
+    key: string;
+    webAudioLoadingState: string;
+    _actor: { getSnapshot(): { children: Record<string, { getSnapshot(): { value: unknown } }> } };
+  };
+  const internal = queue as unknown as {
+    _tracks: T[];
+    _scheduledNext: T | null;
+    _actor: { getSnapshot(): { context: { current: T | null } } };
+  };
+  const tracks = internal._tracks;
   const trackCount = tracks.length;
+  // The machine's own idea of the current track, not a value derived from it.
+  const current = internal._actor.getSnapshot().context.current;
+  const currentIndex = current ? tracks.indexOf(current) : -1;
   const label = `[seed=${seed}] after ${opDescription}`;
+
+  // An independent spec of "what plays after position i", to check the
+  // queue's scheduling and preloading against.
+  const nextPos = (i: number) =>
+    i + 1 < trackCount ? i + 1 : queue.repeat === 'all' && trackCount > 1 ? 0 : -1;
 
   // 1. State is one of the valid states
   const validStates = ['idle', 'playing', 'paused', 'ended'];
   expect(validStates.includes(snap.state), `${label}: Invalid state "${snap.state}"`).toBe(true);
 
-  // 2. Machine trackCount matches actual tracks length
-  expect(
-    snap.context.trackCount,
-    `${label}: trackCount mismatch machine=${snap.context.trackCount} actual=${trackCount}`
-  ).toBe(trackCount);
-
-  // 3. currentTrackIndex is in bounds (0 <= idx < trackCount, or >= 0 when empty)
-  expect(
-    snap.context.currentTrackIndex,
-    `${label}: currentTrackIndex ${snap.context.currentTrackIndex} < 0`
-  ).toBeGreaterThanOrEqual(0);
+  // 2. The machine's current track is in the queue, and is null only when
+  //    the queue is empty.
   if (trackCount > 0) {
-    expect(
-      snap.context.currentTrackIndex,
-      `${label}: currentTrackIndex ${snap.context.currentTrackIndex} >= trackCount ${trackCount}`
-    ).toBeLessThan(trackCount);
+    expect(current, `${label}: no current track with ${trackCount} tracks`).not.toBeNull();
+    expect(currentIndex, `${label}: current track ${current?.key} is not in the queue`).not.toBe(
+      -1
+    );
+  } else {
+    expect(current, `${label}: current track ${current?.key} in an empty queue`).toBeNull();
   }
 
-  // 4. Internal _tracks[i].index === i (sequential indices)
-  for (let i = 0; i < trackCount; i++) {
-    expect(
-      tracks[i].index,
-      `${label}: _tracks[${i}].index is ${tracks[i].index}, expected ${i}`
-    ).toBe(i);
-  }
+  // 3. Positions reported publicly match the array.
+  expect(
+    queue.currentTrackIndex,
+    `${label}: currentTrackIndex ${queue.currentTrackIndex} != position of current ${currentIndex}`
+  ).toBe(Math.max(0, currentIndex));
+  expect(queue.currentKey, `${label}: currentKey mismatch`).toBe(current?.key ?? null);
+  expect(snap.context.trackCount, `${label}: trackCount mismatch`).toBe(trackCount);
+
+  // 4. TrackInfo.index is each track's position.
+  queue.tracks.forEach((info, i) => {
+    expect(info.index, `${label}: tracks[${i}].index is ${info.index}`).toBe(i);
+  });
 
   // 5. "playing" or "paused" with 0 tracks is invalid
   if (trackCount === 0) {
@@ -108,12 +135,12 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
     ).toBe(false);
   }
 
-  // 6. "ended" state should only occur at or past the last track
+  // 6. "ended" only when nothing plays after the current track.
   if (snap.state === 'ended' && trackCount > 0) {
     expect(
-      snap.context.currentTrackIndex,
-      `${label}: ended state but currentTrackIndex ${snap.context.currentTrackIndex} is not last (trackCount=${trackCount})`
-    ).toBeGreaterThanOrEqual(trackCount - 1);
+      currentIndex === trackCount - 1 || nextPos(currentIndex) === -1,
+      `${label}: ended at ${current?.key} (position ${currentIndex} of ${trackCount})`
+    ).toBe(true);
   }
 
   // 7. volume should always be in [0, 1]
@@ -130,17 +157,50 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
     expect(queue.isPlaying, `${label}: isPlaying should be false in paused state`).toBe(false);
   }
 
-  // 9. currentTrackIndex getter should match machine context
-  expect(
-    queue.currentTrackIndex,
-    `${label}: public currentTrackIndex getter ${queue.currentTrackIndex} != machine ${snap.context.currentTrackIndex}`
-  ).toBe(snap.context.currentTrackIndex);
-
   // 10. tracks.length should match internal _tracks.length
   expect(
     queue.tracks.length,
     `${label}: public tracks.length ${queue.tracks.length} != internal ${trackCount}`
   ).toBe(trackCount);
+
+  // 11b. The scheduled gapless track (if any) is in the queue and is the track
+  // that plays after the current one (the next, or the first across a
+  // repeat-'all' wrap) — never a stale or reordered one. Repeat 'one' never
+  // schedules.
+  if (internal._scheduledNext !== null) {
+    const expected = queue.repeat === 'one' ? -1 : nextPos(currentIndex);
+    expect(expected, `${label}: a track is scheduled but none should be`).not.toBe(-1);
+    expect(
+      tracks.indexOf(internal._scheduledNext),
+      `${label}: scheduled track is not the one after current (repeat=${queue.repeat})`
+    ).toBe(expected);
+  }
+
+  // 11e. No track outside the preload window (current + next preloadNumTracks
+  // in play order) is still downloading: displaced downloads are aborted.
+  // Decoding is allowed to finish (the bytes are already here).
+  if (currentIndex !== -1 && snap.state !== 'ended') {
+    const inWindow = new Set<number>([currentIndex]);
+    for (
+      let step = 1, i = nextPos(currentIndex);
+      step <= queue.preloadNumTracks && i !== -1 && i !== currentIndex;
+      step++, i = nextPos(i)
+    ) {
+      inWindow.add(i);
+    }
+    tracks.forEach((t, i) => {
+      if (inWindow.has(i) || t.webAudioLoadingState !== 'LOADING') return;
+      const stage = t._actor.getSnapshot().children.fetchDecode?.getSnapshot().value;
+      expect(
+        stage === 'resolvingUrl' || stage === 'fetching',
+        `${label}: track ${i} (${t.key}) is outside the window but still downloading (${String(stage)})`
+      ).toBe(false);
+    });
+  }
+
+  // 11c. Keys are unique.
+  const keys = queue.keys;
+  expect(new Set(keys).size, `${label}: duplicate keys ${keys.join(',')}`).toBe(keys.length);
 
   // 11. _scheduledNextIndex (if set) should be in bounds
   const scheduledIdx = (queue as unknown as { _scheduledNextIndex: number | null })
@@ -214,7 +274,7 @@ function executeOp(queue: Queue, op: OpName, rand: () => number): string {
       ];
       if (currentTrack) {
         queue.onTrackEnded(currentTrack as never);
-        return `trackEnded(track=${currentTrack.index})`;
+        return `trackEnded(track=${(currentTrack as unknown as { key: string }).key})`;
       }
       return 'trackEnded(skip-no-current)';
     }
@@ -245,7 +305,74 @@ function executeOp(queue: Queue, op: OpName, rand: () => number): string {
       mockFetchSuccess();
       return 'networkRestore()';
     }
+    case 'insertAfterCurrent': {
+      const n = 1 + Math.floor(rand() * 3);
+      const entries = Array.from({ length: n }, () => newEntry());
+      queue.insert(entries, { after: 'current' });
+      return `insert(${entries.map((e) => e.key)}, after current)`;
+    }
+    case 'insertRandom': {
+      const keys = queue.keys;
+      const after = keys.length ? keys[Math.floor(rand() * keys.length)] : 'end';
+      const e = newEntry();
+      queue.insert([e], { after });
+      return `insert(${e.key}, after ${after})`;
+    }
+    case 'moveRandom': {
+      const keys = queue.keys;
+      if (keys.length < 2) return 'move(skip)';
+      const key = keys[Math.floor(rand() * keys.length)];
+      const after = rand() < 0.2 ? 'start' : keys[Math.floor(rand() * keys.length)];
+      queue.move(key, { after });
+      return `move(${key}, after ${after})`;
+    }
+    case 'moveCurrent': {
+      const keys = queue.keys;
+      const cur = queue.currentKey;
+      if (!cur || keys.length < 2) return 'moveCurrent(skip)';
+      const after = keys[Math.floor(rand() * keys.length)];
+      queue.move(cur, { after });
+      return `move(current ${cur}, after ${after})`;
+    }
+    case 'removeKey': {
+      const keys = queue.keys;
+      if (!keys.length) return 'removeKey(skip)';
+      const key = keys[Math.floor(rand() * keys.length)];
+      queue.remove(key);
+      return `remove(${key})`;
+    }
+    case 'reorderAll': {
+      // Shuffle, keeping every key: the current track must survive untouched.
+      const keys = queue.keys;
+      for (let i = keys.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [keys[i], keys[j]] = [keys[j], keys[i]];
+      }
+      queue.setEntries(keys.map((key) => ({ key, url: `${key}.mp3` })));
+      return `setEntries(shuffled ${keys.length})`;
+    }
+    case 'replaceAll': {
+      // Keep a random subset (maybe dropping the current track) plus new entries.
+      const kept = queue.keys.filter(() => rand() < 0.5);
+      const added = Array.from({ length: Math.floor(rand() * 4) }, () => newEntry());
+      const entries = [...kept.map((key) => ({ key, url: `${key}.mp3` })), ...added];
+      const startKey = entries.length
+        ? entries[Math.floor(rand() * entries.length)].key
+        : undefined;
+      queue.setEntries(entries, { startKey });
+      return `setEntries(${entries.map((e) => e.key)}, start ${startKey})`;
+    }
+    case 'setRepeat': {
+      const mode = (['off', 'all', 'one'] as const)[Math.floor(rand() * 3)];
+      queue.setRepeat(mode);
+      return `setRepeat(${mode})`;
+    }
   }
+}
+
+function newEntry() {
+  trackCounter++;
+  return { key: `k${trackCounter}`, url: `fuzz-entry-${trackCounter}.mp3` };
 }
 
 // ---------------------------------------------------------------------------
@@ -280,11 +407,118 @@ function runFuzzScenario(
 // Test seeds
 // ---------------------------------------------------------------------------
 
-const SEEDS = [42, 1337, 99999, 314159, 271828];
+// FUZZ_SEEDS=60 pnpm test tests/unit/fuzz.test.ts runs a wider sweep.
+const FUZZ_SEEDS = (globalThis as { process?: { env: Record<string, string | undefined> } }).process
+  ?.env.FUZZ_SEEDS;
+const SEEDS = FUZZ_SEEDS
+  ? Array.from({ length: Number(FUZZ_SEEDS) }, (_, i) => 1000 + i * 7919)
+  : [42, 1337, 99999, 314159, 271828];
 
 // ---------------------------------------------------------------------------
 // Scenarios
 // ---------------------------------------------------------------------------
+
+const EDIT_WEIGHTS: Weights = {
+  next: 2,
+  previous: 1,
+  gotoTrack: 1,
+  play: 2,
+  pause: 1,
+  seek: 1,
+  trackEnded: 2,
+  insertAfterCurrent: 2,
+  insertRandom: 1,
+  moveRandom: 2,
+  moveCurrent: 1,
+  removeKey: 1,
+  reorderAll: 1,
+  replaceAll: 1,
+  setRepeat: 1,
+};
+
+/**
+ * HYBRID mode with real (mocked) decodes, so gapless starts actually get
+ * scheduled between edits. Time advances randomly; async work settles
+ * between ops.
+ */
+/**
+ * fetch mock whose GETs take a seeded random 0–12 event-loop ticks, so many
+ * downloads are still in flight when the next edit lands (the fuzz settles 3
+ * ticks per op). Aborts reject, as real fetch does.
+ */
+function mockFetchSlow(seed: number): void {
+  const rand = mulberry32(seed ^ 0x5eed);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((_url: string, init?: RequestInit) => {
+      const ticks = Math.floor(rand() * 13);
+      return new Promise((resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        const step = (n: number) => {
+          if (signal?.aborted) return;
+          if (n === 0) {
+            return resolve({
+              ok: true,
+              url: '',
+              redirected: false,
+              arrayBuffer: () => Promise.resolve(new ArrayBuffer(1024)),
+            });
+          }
+          setTimeout(() => step(n - 1), 0);
+        };
+        step(ticks);
+      });
+    })
+  );
+}
+
+async function runAsyncEditFuzz(seed: number, initialTracks: number, numOps: number) {
+  trackCounter = 0;
+  mockFetchSlow(seed);
+  const rand = mulberry32(seed);
+  const queue = new Queue();
+  queue.setEntries(Array.from({ length: initialTracks }, () => newEntry()));
+  let scheduledSeen = 0;
+  try {
+    for (let i = 0; i < numOps; i++) {
+      const op = pickOp(rand, EDIT_WEIGHTS);
+      const desc = executeOp(queue, op, rand);
+      checkInvariants(queue, `op #${i}: ${desc}`, seed);
+      if (rand() < 0.5) advanceTime(rand() * 30);
+      for (let t = 0; t < 3; t++) await new Promise((r) => setTimeout(r, 0));
+      checkInvariants(queue, `op #${i}: ${desc} (settled)`, seed);
+      if ((queue as unknown as { _scheduledNext: unknown })._scheduledNext) scheduledSeen++;
+    }
+  } finally {
+    queue.destroy();
+  }
+  return scheduledSeen;
+}
+
+describe('Fuzz: key-based edits', () => {
+  describe('I: Edits interleaved with navigation (HTML5_ONLY, 10 tracks, 1000 ops)', () => {
+    it.each(SEEDS)('seed %i', (seed) => {
+      runFuzzScenario(seed, 10, 1000, EDIT_WEIGHTS);
+    });
+  });
+
+  describe('J: Edits from empty (HTML5_ONLY, 0 tracks, 500 ops)', () => {
+    it.each(SEEDS)('seed %i', (seed) => {
+      runFuzzScenario(seed, 0, 500, EDIT_WEIGHTS);
+    });
+  });
+
+  describe('K: Edits while gapless is scheduled (HYBRID, async, 8 tracks, 400 ops)', () => {
+    it.each(SEEDS)('seed %i', async (seed) => {
+      const scheduledSeen = await runAsyncEditFuzz(seed, 8, 400);
+      // The scenario is only meaningful if gapless starts actually got
+      // scheduled. With slow downloads that's ~10–60 times in 400 ops.
+      expect(scheduledSeen).toBeGreaterThan(5);
+    });
+  });
+});
 
 describe('Fuzz: navigation stress tests', () => {
   afterEach(() => {
@@ -589,7 +823,7 @@ describe('Bug regressions', () => {
 
       // Grab reference to track at index 0
       const trackA = getTracks(q)[0];
-      expect(trackA.index).toBe(0);
+      expect(getTracks(q).indexOf(trackA)).toBe(0);
 
       // Navigate to track 1, then remove track 0
       q.gotoTrack(1, true);

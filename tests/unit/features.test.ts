@@ -34,7 +34,8 @@ function makeQueue(overrides: Partial<TrackQueueRef> = {}): TrackQueueRef {
     volume: 1,
     playbackMethod: 'HYBRID' as const,
     playbackRate: 1,
-    currentTrackIndex: 0,
+    currentKey: null,
+    indexOf: () => 0,
     ...overrides,
   };
 }
@@ -347,7 +348,7 @@ describe('playbackRate', () => {
 
   it('Track.setPlaybackRate updates both html5 and sourceNode', () => {
     const q = makeQueue({ playbackRate: 1 });
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: q });
+    const t = new Track({ trackUrl: 'test.mp3', queue: q });
     t.audioBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
     t.play();
     t.setPlaybackRate(2);

@@ -1,225 +1,325 @@
 // ---------------------------------------------------------------------------
 // QueueMachine — state-transition tests (xstate v5)
+//
+// The machine is generic over its entries and asks a PlayList about order, so
+// these tests use plain strings and a small array-backed list.
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect } from 'vitest';
 import { createActor } from 'xstate';
 import { createQueueMachine } from '../../src/machines/queue.machine';
-import type { QueueContext } from '../../src/machines/queue.machine';
+import type { PlayList } from '../../src/machines/queue.machine';
+import type { RepeatMode } from '../../src/types';
 
-function makeCtx(overrides: Partial<QueueContext> = {}): QueueContext {
-  return {
-    currentTrackIndex: 0,
-    trackCount: 3,
-    ...overrides,
+type TestList = PlayList<string> & { items: string[]; repeat: RepeatMode };
+
+function makeList(items: string[], repeat: RepeatMode = 'off'): TestList {
+  const list: TestList = {
+    items: [...items],
+    repeat,
+    next(t) {
+      const i = list.items.indexOf(t);
+      if (i === -1) return null;
+      if (i + 1 < list.items.length) return list.items[i + 1];
+      return list.repeat === 'all' && list.items.length > 1 ? list.items[0] : null;
+    },
+    previous: (t) => list.items[list.items.indexOf(t) - 1] ?? null,
+    first: () => list.items[0] ?? null,
+    size: () => list.items.length,
+    repeatsCurrent: () =>
+      list.repeat === 'one' || (list.repeat === 'all' && list.items.length === 1),
   };
+  return list;
 }
 
-function actorFrom(ctx: QueueContext, initialState?: string) {
-  const actor = createActor(createQueueMachine(ctx));
+function actorFrom(
+  opts: {
+    items?: string[];
+    current?: string;
+    state?: 'playing' | 'paused';
+    repeat?: RepeatMode;
+  } = {}
+) {
+  const list = makeList(opts.items ?? ['a', 'b', 'c'], opts.repeat);
+  const actor = createActor(
+    createQueueMachine<string>({ current: opts.current ?? list.first(), list })
+  );
   actor.start();
-  // Drive to the desired initial state
-  if (initialState === 'playing') {
+  if (opts.state === 'playing') {
     actor.send({ type: 'PLAY' });
-  } else if (initialState === 'paused') {
+  } else if (opts.state === 'paused') {
     actor.send({ type: 'PLAY' });
     actor.send({ type: 'PAUSE' });
-  } else if (initialState === 'ended') {
-    // Drive to ended by ending all tracks
-    for (let i = ctx.currentTrackIndex; i < ctx.trackCount - 1; i++) {
-      actor.send({ type: 'PLAY' });
-      actor.send({ type: 'TRACK_ENDED' });
-    }
-    // Now on last track — one more TRACK_ENDED
-    if (actor.getSnapshot().value !== 'ended') {
-      actor.send({ type: 'PLAY' });
-      actor.send({ type: 'TRACK_ENDED' });
-    }
   }
-  return actor;
+  return {
+    actor,
+    list,
+    state: () => actor.getSnapshot().value,
+    current: () => actor.getSnapshot().context.current,
+  };
 }
 
 describe('QueueMachine', () => {
   describe('idle state', () => {
     it('transitions idle → playing on PLAY', () => {
-      const a = actorFrom(makeCtx());
-      a.send({ type: 'PLAY' });
-      expect(a.getSnapshot().value).toBe('playing');
+      const m = actorFrom();
+      m.actor.send({ type: 'PLAY' });
+      expect(m.state()).toBe('playing');
     });
 
-    it('stays in idle on ADD_TRACK and increments trackCount', () => {
-      const a = actorFrom(makeCtx({ trackCount: 2 }));
-      a.send({ type: 'ADD_TRACK' });
-      expect(a.getSnapshot().value).toBe('idle');
-      expect(a.getSnapshot().context.trackCount).toBe(3);
+    it('stays in idle on LIST_CHANGED', () => {
+      const m = actorFrom({ items: ['a', 'b'] });
+      m.list.items.push('c');
+      m.actor.send({ type: 'LIST_CHANGED', current: 'a' });
+      expect(m.state()).toBe('idle');
+      expect(m.current()).toBe('a');
     });
 
     it('transitions idle → paused on GOTO without playImmediately', () => {
-      const a = actorFrom(makeCtx());
-      a.send({ type: 'GOTO', index: 2 });
-      expect(a.getSnapshot().value).toBe('paused');
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(2);
+      const m = actorFrom();
+      m.actor.send({ type: 'GOTO', track: 'c' });
+      expect(m.state()).toBe('paused');
+      expect(m.current()).toBe('c');
     });
 
     // Bug #1 regression: GOTO with playImmediately from idle → playing
     it('transitions idle → playing on GOTO with playImmediately=true', () => {
-      const a = actorFrom(makeCtx());
-      a.send({ type: 'GOTO', index: 1, playImmediately: true });
-      expect(a.getSnapshot().value).toBe('playing');
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
+      const m = actorFrom();
+      m.actor.send({ type: 'GOTO', track: 'b', playImmediately: true });
+      expect(m.state()).toBe('playing');
+      expect(m.current()).toBe('b');
     });
   });
 
   describe('playing state', () => {
     it('transitions playing → paused on PAUSE', () => {
-      const a = actorFrom(makeCtx(), 'playing');
-      a.send({ type: 'PAUSE' });
-      expect(a.getSnapshot().value).toBe('paused');
+      const m = actorFrom({ state: 'playing' });
+      m.actor.send({ type: 'PAUSE' });
+      expect(m.state()).toBe('paused');
     });
 
     it('transitions playing → paused on TOGGLE', () => {
-      const a = actorFrom(makeCtx(), 'playing');
-      a.send({ type: 'TOGGLE' });
-      expect(a.getSnapshot().value).toBe('paused');
+      const m = actorFrom({ state: 'playing' });
+      m.actor.send({ type: 'TOGGLE' });
+      expect(m.state()).toBe('paused');
     });
 
-    it('advances index on NEXT (stays playing)', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0, trackCount: 3 }), 'playing');
-      a.send({ type: 'NEXT' });
-      expect(a.getSnapshot().value).toBe('playing');
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
+    it('advances on NEXT (stays playing)', () => {
+      const m = actorFrom({ state: 'playing' });
+      m.actor.send({ type: 'NEXT' });
+      expect(m.state()).toBe('playing');
+      expect(m.current()).toBe('b');
     });
 
-    it('does not advance past last track on NEXT', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 2, trackCount: 3 }), 'playing');
-      a.send({ type: 'NEXT' });
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(2);
+    it('does not advance past the last entry on NEXT', () => {
+      const m = actorFrom({ current: 'c', state: 'playing' });
+      m.actor.send({ type: 'NEXT' });
+      expect(m.current()).toBe('c');
     });
 
-    it('decrements index on PREVIOUS', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 2 }), 'playing');
-      a.send({ type: 'PREVIOUS' });
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
+    it('goes back on PREVIOUS', () => {
+      const m = actorFrom({ current: 'c', state: 'playing' });
+      m.actor.send({ type: 'PREVIOUS' });
+      expect(m.current()).toBe('b');
     });
 
-    it('does not go below 0 on PREVIOUS', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0 }), 'playing');
-      a.send({ type: 'PREVIOUS' });
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(0);
+    it('stays on the first entry on PREVIOUS', () => {
+      const m = actorFrom({ state: 'playing' });
+      m.actor.send({ type: 'PREVIOUS' });
+      expect(m.current()).toBe('a');
     });
 
-    it('transitions playing → ended when last track ends', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 2, trackCount: 3 }), 'playing');
-      a.send({ type: 'TRACK_ENDED' });
-      expect(a.getSnapshot().value).toBe('ended');
+    it('transitions playing → ended when the last entry ends', () => {
+      const m = actorFrom({ current: 'c', state: 'playing' });
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.state()).toBe('ended');
     });
 
-    it('advances to next track on TRACK_ENDED when not last', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0, trackCount: 3 }), 'playing');
-      a.send({ type: 'TRACK_ENDED' });
-      expect(a.getSnapshot().value).toBe('playing');
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
+    it('advances to the next entry on TRACK_ENDED when not last', () => {
+      const m = actorFrom({ state: 'playing' });
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.state()).toBe('playing');
+      expect(m.current()).toBe('b');
     });
 
-    it('jumps to GOTO index', () => {
-      const a = actorFrom(makeCtx(), 'playing');
-      a.send({ type: 'GOTO', index: 2 });
-      expect(a.getSnapshot().value).toBe('playing');
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(2);
+    it('jumps on GOTO and keeps playing with playImmediately', () => {
+      const m = actorFrom({ state: 'playing' });
+      m.actor.send({ type: 'GOTO', track: 'c', playImmediately: true });
+      expect(m.state()).toBe('playing');
+      expect(m.current()).toBe('c');
     });
 
-    it('adjusts currentTrackIndex when a track before current is removed', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 2, trackCount: 4 }), 'playing');
-      a.send({ type: 'REMOVE_TRACK', index: 1 });
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
-      expect(a.getSnapshot().context.trackCount).toBe(3);
+    it('jumps on GOTO and pauses without playImmediately', () => {
+      // The old entry is deactivated and the new one isn't started, so the
+      // queue is paused, not 'playing' with nothing playing.
+      const m = actorFrom({ state: 'playing' });
+      m.actor.send({ type: 'GOTO', track: 'c' });
+      expect(m.state()).toBe('paused');
+      expect(m.current()).toBe('c');
     });
 
-    it('does not adjust index when a track after current is removed', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 1, trackCount: 4 }), 'playing');
-      a.send({ type: 'REMOVE_TRACK', index: 3 });
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
-      expect(a.getSnapshot().context.trackCount).toBe(3);
+    it('keeps the current entry when another one is removed', () => {
+      const m = actorFrom({ items: ['a', 'b', 'c', 'd'], current: 'c', state: 'playing' });
+      m.list.items.splice(1, 1); // remove 'b'
+      m.actor.send({ type: 'REMOVE_TRACK', track: 'b', successor: 'c' });
+      expect(m.current()).toBe('c');
+      expect(m.state()).toBe('playing');
+    });
+
+    it('moves to the successor when the current entry is removed', () => {
+      const m = actorFrom({ current: 'b', state: 'playing' });
+      m.list.items.splice(1, 1); // remove 'b'
+      m.actor.send({ type: 'REMOVE_TRACK', track: 'b', successor: 'c' });
+      expect(m.current()).toBe('c');
+      expect(m.state()).toBe('playing');
+    });
+
+    it('goes idle when the last entry is removed', () => {
+      const m = actorFrom({ items: ['a'], state: 'playing' });
+      m.list.items.length = 0;
+      m.actor.send({ type: 'REMOVE_TRACK', track: 'a', successor: null });
+      expect(m.state()).toBe('idle');
+      expect(m.current()).toBeNull();
     });
   });
 
   describe('paused state', () => {
     it('transitions paused → playing on PLAY', () => {
-      const a = actorFrom(makeCtx(), 'paused');
-      a.send({ type: 'PLAY' });
-      expect(a.getSnapshot().value).toBe('playing');
+      const m = actorFrom({ state: 'paused' });
+      m.actor.send({ type: 'PLAY' });
+      expect(m.state()).toBe('playing');
     });
 
     it('transitions paused → playing on TOGGLE', () => {
-      const a = actorFrom(makeCtx(), 'paused');
-      a.send({ type: 'TOGGLE' });
-      expect(a.getSnapshot().value).toBe('playing');
+      const m = actorFrom({ state: 'paused' });
+      m.actor.send({ type: 'TOGGLE' });
+      expect(m.state()).toBe('playing');
     });
 
-    it('TRACK_ENDED in paused stays paused and advances index (not last track)', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0, trackCount: 3 }), 'paused');
-      a.send({ type: 'TRACK_ENDED' });
-      expect(a.getSnapshot().value).toBe('paused');
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
+    it('TRACK_ENDED in paused stays paused and advances (not last)', () => {
+      const m = actorFrom({ state: 'paused' });
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.state()).toBe('paused');
+      expect(m.current()).toBe('b');
     });
 
-    it('TRACK_ENDED in paused does not auto-play', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0, trackCount: 3 }), 'paused');
-      a.send({ type: 'TRACK_ENDED' });
-      expect(a.getSnapshot().value).not.toBe('playing');
+    it('TRACK_ENDED in paused on the last entry goes to ended', () => {
+      const m = actorFrom({ current: 'c', state: 'paused' });
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.state()).toBe('ended');
     });
 
-    it('TRACK_ENDED in paused on last track goes to ended', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 2, trackCount: 3 }), 'paused');
-      a.send({ type: 'TRACK_ENDED' });
-      expect(a.getSnapshot().value).toBe('ended');
-    });
-
-    it('after TRACK_ENDED while paused, PLAY starts (index already advanced)', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0, trackCount: 3 }), 'paused');
-      a.send({ type: 'TRACK_ENDED' });
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(1);
-      a.send({ type: 'PLAY' });
-      expect(a.getSnapshot().value).toBe('playing');
+    it('after TRACK_ENDED while paused, PLAY starts the advanced entry', () => {
+      const m = actorFrom({ state: 'paused' });
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.current()).toBe('b');
+      m.actor.send({ type: 'PLAY' });
+      expect(m.state()).toBe('playing');
     });
 
     // Bug #1 regression: GOTO with playImmediately from paused → playing
     it('transitions paused → playing on GOTO with playImmediately=true', () => {
-      const a = actorFrom(makeCtx(), 'paused');
-      a.send({ type: 'GOTO', index: 2, playImmediately: true });
-      expect(a.getSnapshot().value).toBe('playing');
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(2);
+      const m = actorFrom({ state: 'paused' });
+      m.actor.send({ type: 'GOTO', track: 'c', playImmediately: true });
+      expect(m.state()).toBe('playing');
+      expect(m.current()).toBe('c');
     });
   });
 
   describe('ended state', () => {
-    it('restarts from track 0 on PLAY', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0, trackCount: 1 }));
-      a.send({ type: 'PLAY' });
-      a.send({ type: 'TRACK_ENDED' });
-      expect(a.getSnapshot().value).toBe('ended');
-      a.send({ type: 'PLAY' });
-      expect(a.getSnapshot().value).toBe('playing');
-      expect(a.getSnapshot().context.currentTrackIndex).toBe(0);
+    function ended() {
+      const m = actorFrom({ items: ['a'] });
+      m.actor.send({ type: 'PLAY' });
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.state()).toBe('ended');
+      return m;
+    }
+
+    it('restarts from the first entry on PLAY', () => {
+      const m = ended();
+      m.actor.send({ type: 'PLAY' });
+      expect(m.state()).toBe('playing');
+      expect(m.current()).toBe('a');
     });
 
     it('transitions ended → paused on GOTO without playImmediately', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0, trackCount: 1 }));
-      a.send({ type: 'PLAY' });
-      a.send({ type: 'TRACK_ENDED' });
-      a.send({ type: 'GOTO', index: 0 });
-      expect(a.getSnapshot().value).toBe('paused');
+      const m = ended();
+      m.actor.send({ type: 'GOTO', track: 'a' });
+      expect(m.state()).toBe('paused');
+    });
+
+    it('LIST_CHANGED that puts something after the current entry leaves ended', () => {
+      const m = ended();
+      m.list.items.push('b');
+      m.actor.send({ type: 'LIST_CHANGED', current: 'a' });
+      expect(m.state()).toBe('paused');
+      expect(m.current()).toBe('a');
+    });
+
+    it('LIST_CHANGED with nothing after the current entry stays ended', () => {
+      const m = ended();
+      m.list.items.unshift('z');
+      m.actor.send({ type: 'LIST_CHANGED', current: 'a' });
+      expect(m.state()).toBe('ended');
     });
 
     // Bug #5 regression: REMOVE_TRACK should work in ended state (via root-level handler)
     it('REMOVE_TRACK works in ended state', () => {
-      const a = actorFrom(makeCtx({ currentTrackIndex: 0, trackCount: 1 }));
-      a.send({ type: 'PLAY' });
-      a.send({ type: 'TRACK_ENDED' });
-      expect(a.getSnapshot().value).toBe('ended');
-      a.send({ type: 'ADD_TRACK' }); // trackCount → 2
-      a.send({ type: 'REMOVE_TRACK', index: 1 });
-      expect(a.getSnapshot().context.trackCount).toBe(1);
+      const m = ended();
+      m.list.items.push('b');
+      m.actor.send({ type: 'LIST_CHANGED', current: 'a' });
+      m.list.items.splice(1, 1);
+      m.actor.send({ type: 'REMOVE_TRACK', track: 'b', successor: null });
+      expect(m.current()).toBe('a');
+    });
+  });
+
+  describe('LIST_CHANGED', () => {
+    it('emptying the list goes idle from any state', () => {
+      for (const state of ['playing', 'paused'] as const) {
+        const m = actorFrom({ state });
+        m.list.items.length = 0;
+        m.actor.send({ type: 'LIST_CHANGED', current: null });
+        expect(m.state()).toBe('idle');
+        expect(m.current()).toBeNull();
+      }
+    });
+
+    it('takes the current entry from the event, not from a position', () => {
+      const m = actorFrom({ current: 'b', state: 'playing' });
+      m.list.items.reverse(); // ['c', 'b', 'a']
+      m.actor.send({ type: 'LIST_CHANGED', current: 'b' });
+      expect(m.current()).toBe('b');
+      expect(m.state()).toBe('playing');
+      m.actor.send({ type: 'NEXT' });
+      expect(m.current()).toBe('a'); // follows the new order
+    });
+  });
+
+  describe('repeat (asked of the list)', () => {
+    it("'all' wraps on TRACK_ENDED and on NEXT", () => {
+      const m = actorFrom({ current: 'c', state: 'playing', repeat: 'all' });
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.state()).toBe('playing');
+      expect(m.current()).toBe('a');
+
+      m.actor.send({ type: 'GOTO', track: 'c', playImmediately: true });
+      m.actor.send({ type: 'NEXT' });
+      expect(m.current()).toBe('a');
+    });
+
+    it("'one' restarts the current entry on TRACK_ENDED", () => {
+      const m = actorFrom({ current: 'b', state: 'playing', repeat: 'one' });
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.state()).toBe('playing');
+      expect(m.current()).toBe('b');
+    });
+
+    it('a repeat change takes effect without telling the machine', () => {
+      const m = actorFrom({ current: 'c', state: 'playing' });
+      m.list.repeat = 'all';
+      m.actor.send({ type: 'TRACK_ENDED' });
+      expect(m.current()).toBe('a');
     });
   });
 });
