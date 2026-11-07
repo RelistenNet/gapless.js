@@ -133,8 +133,19 @@ throw on a duplicate key, before changing anything.
 list, it keeps playing and `startKey` is ignored; otherwise playback moves to
 `startKey`, or to the first entry.
 
-The list is played in the order given. To shuffle, pass the entries in shuffled
-order: the current entry keeps playing, and gapless follows the new order.
+#### Shuffling and reordering mid-track
+
+The list plays in the order given, and gapless has no shuffle mode of its own:
+the app decides the order (for example, to keep a "play next" section out of
+the shuffle) and passes it to `setEntries`. Reordering while a track plays is
+safe at any point:
+
+- the current entry keeps playing, untouched;
+- if the entry after it changed, the old one's scheduled gapless start is
+  cancelled, and the new one is preloaded and scheduled;
+- downloads for entries that left the preload window (the current entry plus
+  the next `preloadNumTracks`) are aborted, so they don't compete with the
+  entries about to play; decoded audio is kept.
 
 #### Repeat
 
