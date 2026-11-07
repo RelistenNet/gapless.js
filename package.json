@@ -1,6 +1,6 @@
 {
   "name": "gapless",
-  "version": "4.4.3",
+  "version": "5.0.0-alpha.0",
   "private": false,
   "description": "Gapless audio playback javascript plugin",
   "license": "MIT",
