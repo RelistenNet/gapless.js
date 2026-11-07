@@ -17,12 +17,15 @@
 // ---------------------------------------------------------------------------
 
 import { setup, assign } from 'xstate';
+import type { RepeatMode } from '../types';
 
 // ---- Context ---------------------------------------------------------------
 
 export interface QueueContext {
   currentTrackIndex: number;
   trackCount: number;
+  /** Defaults to 'off'. */
+  repeat?: RepeatMode;
 }
 
 // ---- Events ----------------------------------------------------------------
@@ -42,7 +45,8 @@ export type QueueEvent =
   | { type: 'TRACK_LOADED'; index: number }
   // Reorder: the queue rearranged its tracks without changing which one is
   // current. Assign-only; side effects are run by Queue._applyOrder.
-  | { type: 'SYNC'; currentTrackIndex: number; trackCount: number };
+  | { type: 'SYNC'; currentTrackIndex: number; trackCount: number }
+  | { type: 'SET_REPEAT'; repeat: RepeatMode };
 
 // ---- Machine ---------------------------------------------------------------
 
@@ -53,7 +57,13 @@ export function createQueueMachine(initialContext: QueueContext) {
       events: {} as QueueEvent,
     },
     guards: {
-      hasNextTrack: ({ context }) => context.currentTrackIndex + 1 < context.trackCount,
+      hasNextTrack: ({ context }) =>
+        context.currentTrackIndex + 1 < context.trackCount ||
+        (context.repeat === 'all' && context.trackCount > 0),
+      // Repeat 'all' over a single track is the same as repeat 'one'.
+      repeatsCurrent: ({ context }) =>
+        context.trackCount > 0 &&
+        (context.repeat === 'one' || (context.repeat === 'all' && context.trackCount === 1)),
       playImmediately: ({ event }) =>
         !!(event as { type: 'GOTO'; playImmediately?: boolean }).playImmediately,
       willBeEmpty: ({ context }) => context.trackCount <= 1,
@@ -85,15 +95,22 @@ export function createQueueMachine(initialContext: QueueContext) {
       advanceToNextTrack: assign({
         currentTrackIndex: ({ context }) => {
           const next = context.currentTrackIndex + 1;
-          return next < context.trackCount ? next : context.currentTrackIndex;
+          if (next < context.trackCount) return next;
+          return context.repeat === 'all' ? 0 : context.currentTrackIndex;
         },
       }),
       goToPreviousTrack: assign({
         currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
       }),
       advanceOnTrackEnd: assign({
-        currentTrackIndex: ({ context }) =>
-          Math.min(context.currentTrackIndex + 1, context.trackCount - 1),
+        currentTrackIndex: ({ context }) => {
+          const next = context.currentTrackIndex + 1;
+          if (next < context.trackCount) return next;
+          return context.repeat === 'all' ? 0 : context.trackCount - 1;
+        },
+      }),
+      setRepeat: assign({
+        repeat: ({ event }) => (event as { type: 'SET_REPEAT'; repeat: RepeatMode }).repeat,
       }),
       syncOrder: assign({
         currentTrackIndex: ({ event }) =>
@@ -135,6 +152,9 @@ export function createQueueMachine(initialContext: QueueContext) {
       },
       REMOVE_TRACK: {
         actions: 'decrementTrackCount',
+      },
+      SET_REPEAT: {
+        actions: 'setRepeat',
       },
       SYNC: [
         {
@@ -285,6 +305,21 @@ export function createQueueMachine(initialContext: QueueContext) {
           },
           TRACK_ENDED: [
             {
+              // Repeat one: restart the track that just ended.
+              guard: 'repeatsCurrent',
+              target: 'playing',
+              actions: [
+                'deactivateEndedTrack',
+                'cancelAllGapless',
+                'activateCurrent',
+                'seekCurrentToStartTime',
+                'playCurrent',
+                'notifyStartNewTrack',
+                'updateMediaSessionMetadata',
+                'preloadAhead',
+              ],
+            },
+            {
               guard: 'hasNextTrack',
               target: 'playing',
               actions: [
@@ -412,6 +447,11 @@ export function createQueueMachine(initialContext: QueueContext) {
             actions: ['seekCurrent'],
           },
           TRACK_ENDED: [
+            {
+              guard: 'repeatsCurrent',
+              target: 'paused',
+              actions: ['deactivateEndedTrack', 'seekCurrentToStartTime', 'notifyStartNewTrack'],
+            },
             {
               guard: 'hasNextTrack',
               target: 'paused',

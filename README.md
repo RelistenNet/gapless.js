@@ -65,6 +65,7 @@ const player = new Queue({
   volume: 1, // Initial volume, 0.0–1.0
   preloadNumTracks: 2, // Number of tracks to preload ahead (0 to disable)
   playbackRate: 1, // Initial playback rate, 0.25–4.0
+  repeat: 'off', // 'off' | 'all' | 'one'
 });
 ```
 
@@ -83,6 +84,7 @@ const player = new Queue({
 | `setPlaybackRate(rate)`              | Set playback rate (0.25–4.0), reschedules gapless transitions    |
 | `addTrack(url, options?)`            | Add a track to the end of the queue                              |
 | `removeTrack(index)`                 | Remove a track by index                                          |
+| `setRepeat(mode)`                    | `'off'`, `'all'` (loop the list) or `'one'` (loop the track)     |
 | `resumeAudioContext()`               | Resume the AudioContext (for browsers that require user gesture) |
 | `destroy()`                          | Clean up all resources                                           |
 
@@ -98,6 +100,68 @@ const player = new Queue({
 | `volume`            | `number`                 | Current volume                                 |
 | `playbackRate`      | `number`                 | Current playback rate                          |
 | `preloadNumTracks`  | `number`                 | Number of tracks to preload ahead (read/write) |
+| `keys`              | `string[]`               | Entry keys in play order                       |
+| `currentKey`        | `string \| null`         | Key of the current entry                       |
+| `repeat`            | `RepeatMode`             | Current repeat mode                            |
+
+### Editing the queue by key
+
+Every entry has a stable `key`. Editing by key never interrupts the playing
+entry, keeps decoded audio for entries that stay in the queue, and only
+reschedules the gapless transition when the entry after the current one
+changes.
+
+```typescript
+player.setEntries(
+  [
+    { key: 't1', url: 'https://example.com/1.mp3', metadata: { title: 'One' } },
+    { key: 't2', url: 'https://example.com/2.mp3' },
+  ],
+  { startKey: 't1', startTime: 0, play: false }
+);
+
+player.insert([{ key: 'n1', url: 'https://example.com/n1.mp3' }], { after: 'current' });
+player.move('t2', { after: 'start' }); // after: a key, 'current', 'start' or 'end'
+player.remove('n1'); // removing the playing entry advances to the next one
+player.goto('t2', { play: true, startTime: 30 });
+```
+
+`setEntries` reconciles by key. If the playing entry's key is still in the new
+list, it keeps playing and `startKey` is ignored; otherwise playback moves to
+`startKey`, or to the first entry.
+
+The list is played in the order given. To shuffle, pass the entries in shuffled
+order: the current entry keeps playing, and gapless follows the new order.
+
+#### Repeat
+
+- `'all'` loops the list. The wrap from the last entry to the first is gapless.
+- `'one'` restarts the current entry when it ends and fires `onStartNewTrack`
+  again. The restart is not sample-gapless. `next()` still moves on.
+
+#### Snapshot and restore
+
+```typescript
+localStorage.queue = JSON.stringify(player.snapshot());
+// { entries, currentKey, currentTime, repeat }
+
+player.restore(JSON.parse(localStorage.queue)); // paused at the saved position
+```
+
+`snapshot()` keeps the URLs entries were created with, not redirect targets.
+
+#### Change events
+
+```typescript
+const unsubscribe = player.onChange(({ keys, currentKey, repeat }) => {});
+```
+
+`onChange` fires when the order, the current entry or the repeat mode changes,
+and not for progress, play/pause or seeks. It's called in a microtask after the
+edit, once per edit, so a listener may edit the queue itself.
+
+`addTrack`, `removeTrack` and `gotoTrack` still work by index. Entries added
+with `addTrack` get a generated key, or pass `{ key }` in its options.
 
 ### `TrackInfo`
 
@@ -106,6 +170,7 @@ All callbacks and getters return `TrackInfo` objects — plain data snapshots wi
 ```typescript
 interface TrackInfo {
   index: number; // Position in the queue
+  key: string; // Stable identity across reorders
   currentTime: number; // Playback position in seconds
   duration: number; // Total duration (NaN until loaded)
   isPlaying: boolean;

@@ -8,10 +8,13 @@
 // logged on failure so failing runs can be replayed.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { Queue } from '../../src/Queue';
 import type { Track } from '../../src/Track';
 import { mockFetchSuccess, mockFetchFailure, advanceTime } from '../setup';
+
+// Fuzz runs take ~0.1–1.5 s per seed; leave headroom for loaded CI machines.
+vi.setConfig({ testTimeout: 30_000 });
 
 // ---------------------------------------------------------------------------
 // Seeded PRNG — mulberry32
@@ -52,7 +55,8 @@ type OpName =
   | 'moveCurrent'
   | 'removeKey'
   | 'reorderAll'
-  | 'replaceAll';
+  | 'replaceAll'
+  | 'setRepeat';
 
 type Weights = Partial<Record<OpName, number>>;
 
@@ -150,14 +154,27 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
   ).toBe(trackCount);
 
   // 11b. The scheduled gapless track (if any) is still in the queue, and is
-  // the track right after the current one — never a stale or reordered one.
-  const scheduled = (queue as unknown as { _scheduledNext: unknown })._scheduledNext;
-  if (scheduled !== null) {
+  // the track that plays after the current one (current + 1, or 0 across a
+  // repeat-'all' wrap) — never a stale or reordered one. Repeat 'one' never
+  // schedules.
+  const internal = queue as unknown as {
+    _scheduledNext: unknown;
+    _scheduleTargetIndex(i: number): number;
+  };
+  if (internal._scheduledNext !== null) {
+    const expected = internal._scheduleTargetIndex(snap.context.currentTrackIndex);
+    expect(expected, `${label}: a track is scheduled but none should be`).not.toBe(-1);
     expect(
-      tracks.indexOf(scheduled as { index: number }),
-      `${label}: scheduled track is not at currentTrackIndex + 1`
-    ).toBe(snap.context.currentTrackIndex + 1);
+      tracks.indexOf(internal._scheduledNext as { index: number }),
+      `${label}: scheduled track is not the one after current (repeat=${queue.repeat})`
+    ).toBe(expected);
   }
+
+  // 11d. The machine agrees on the repeat mode.
+  expect(
+    (snap.context as { repeat?: string }).repeat ?? 'off',
+    `${label}: machine repeat mismatch`
+  ).toBe(queue.repeat);
 
   // 11c. Keys are unique.
   const keys = queue.keys;
@@ -323,6 +340,11 @@ function executeOp(queue: Queue, op: OpName, rand: () => number): string {
       queue.setEntries(entries, { startKey });
       return `setEntries(${entries.map((e) => e.key)}, start ${startKey})`;
     }
+    case 'setRepeat': {
+      const mode = (['off', 'all', 'one'] as const)[Math.floor(rand() * 3)];
+      queue.setRepeat(mode);
+      return `setRepeat(${mode})`;
+    }
   }
 }
 
@@ -363,7 +385,12 @@ function runFuzzScenario(
 // Test seeds
 // ---------------------------------------------------------------------------
 
-const SEEDS = [42, 1337, 99999, 314159, 271828];
+// FUZZ_SEEDS=60 pnpm test tests/unit/fuzz.test.ts runs a wider sweep.
+const FUZZ_SEEDS = (globalThis as { process?: { env: Record<string, string | undefined> } }).process
+  ?.env.FUZZ_SEEDS;
+const SEEDS = FUZZ_SEEDS
+  ? Array.from({ length: Number(FUZZ_SEEDS) }, (_, i) => 1000 + i * 7919)
+  : [42, 1337, 99999, 314159, 271828];
 
 // ---------------------------------------------------------------------------
 // Scenarios
@@ -384,6 +411,7 @@ const EDIT_WEIGHTS: Weights = {
   removeKey: 1,
   reorderAll: 1,
   replaceAll: 1,
+  setRepeat: 1,
 };
 
 /**

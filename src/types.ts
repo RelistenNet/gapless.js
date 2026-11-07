@@ -63,6 +63,8 @@ export interface GaplessOptions {
    * Initial playback rate, 0.25–4.0. Defaults to 1.
    */
   playbackRate?: number;
+  /** Initial repeat mode. Defaults to 'off'. */
+  repeat?: RepeatMode;
 }
 
 /** Options for dynamically adding a track. */
@@ -75,6 +77,25 @@ export interface AddTrackOptions {
   metadata?: TrackMetadata;
   /** Stable identity for key-based edits. Generated when omitted. */
   key?: string;
+}
+
+/** What happens at the end of a track: stop at the end, loop the list, or loop the track. */
+export type RepeatMode = 'off' | 'all' | 'one';
+
+/** A plain-data copy of the queue: enough to rebuild it with `restore()`. */
+export interface QueueSnapshot {
+  entries: Entry[];
+  currentKey: string | null;
+  /** Seconds into the current entry. */
+  currentTime: number;
+  repeat: RepeatMode;
+}
+
+/** Passed to `onChange` listeners after the order, current entry or repeat mode changes. */
+export interface QueueChange {
+  keys: string[];
+  currentKey: string | null;
+  repeat: RepeatMode;
 }
 
 /** A queue entry for the key-based API. */

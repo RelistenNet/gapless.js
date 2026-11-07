@@ -19,6 +19,9 @@ import type {
   AddTrackOptions,
   Entry,
   Position,
+  QueueChange,
+  QueueSnapshot,
+  RepeatMode,
   TrackInfo,
   TrackMetadata,
   PlaybackMethod,
@@ -79,6 +82,13 @@ export class Queue implements TrackQueueRef {
   readonly playbackMethod: PlaybackMethod;
 
   private _volume: number;
+  private _repeat: RepeatMode;
+  private readonly _changeListeners = new Set<(change: QueueChange) => void>();
+  /** Bumped on every structural edit; with currentKey and repeat, decides when onChange fires. */
+  private _orderVersion = 0;
+  private _changePending = false;
+  private _lastChange: { version: number; currentKey: string | null; repeat: RepeatMode } | null =
+    null;
   private _preloadNumTracks: number;
   private _playbackRate: number;
 
@@ -121,7 +131,9 @@ export class Queue implements TrackQueueRef {
       volume: initialVolume = 1,
       preloadNumTracks = 2,
       playbackRate: initialPlaybackRate = 1,
+      repeat = 'off',
     } = options;
+    this._repeat = repeat;
 
     this._volume = Math.min(1, Math.max(0, initialVolume));
     this._preloadNumTracks = Math.max(0, preloadNumTracks);
@@ -157,6 +169,7 @@ export class Queue implements TrackQueueRef {
     const machine = createQueueMachine({
       currentTrackIndex: 0,
       trackCount: this._tracks.length,
+      repeat: this._repeat,
     }).provide({
       actions: {
         deactivateCurrent: ({ context }) => {
@@ -233,6 +246,7 @@ export class Queue implements TrackQueueRef {
 
     let wasPlaying = false;
     this._actor.subscribe((snapshot) => {
+      this._emitChange();
       const playing = snapshot.value === 'playing';
       // Media Session handlers are page-global. With several queues on one
       // page, the one that starts playing takes over the OS controls.
@@ -291,8 +305,7 @@ export class Queue implements TrackQueueRef {
 
   next(): void {
     const snap = this._actor.getSnapshot();
-    const nextIndex = snap.context.currentTrackIndex + 1;
-    if (nextIndex >= this._tracks.length) return;
+    if (this._nextIndexOf(snap.context.currentTrackIndex) === -1) return;
 
     this._actor.send({ type: 'NEXT' });
   }
@@ -349,6 +362,7 @@ export class Queue implements TrackQueueRef {
         metadata,
       })
     );
+    this._orderVersion++;
     this._actor.send({ type: 'ADD_TRACK' });
   }
 
@@ -359,6 +373,7 @@ export class Queue implements TrackQueueRef {
     this._tracks.splice(index, 1);
     for (let i = index; i < this._tracks.length; i++) this._tracks[i].index = i;
     if (this._scheduledNext === removed) this._scheduledNext = null;
+    this._orderVersion++;
     this._actor.send({ type: 'REMOVE_TRACK', index });
   }
 
@@ -394,8 +409,9 @@ export class Queue implements TrackQueueRef {
     for (const t of this._tracks) if (!kept.has(t)) this._dropTrack(t);
     this._tracks = next;
     next.forEach((t, i) => (t.index = i));
+    this._orderVersion++;
     const startIndex = Math.max(0, opts.startKey ? this._indexOfKey(opts.startKey) : 0);
-    this._actor.send({ type: 'SYNC', currentTrackIndex: 0, trackCount: next.length });
+    this._actor.send({ type: 'SYNC', currentTrackIndex: startIndex, trackCount: next.length });
     if (next.length === 0) return;
     this._actor.send({
       type: 'GOTO',
@@ -438,6 +454,77 @@ export class Queue implements TrackQueueRef {
     if (i !== -1) this.gotoTrack(i, opts.play ?? false, opts.startTime);
   }
 
+  /**
+   * 'all' loops the whole list (gaplessly, across the wrap). 'one' restarts
+   * the current entry when it ends; that restart is not sample-gapless.
+   */
+  setRepeat(mode: RepeatMode): void {
+    if (mode === this._repeat) return;
+    this._repeat = mode;
+    this._actor.send({ type: 'SET_REPEAT', repeat: mode });
+    this._rescheduleIfNextChanged();
+    this._emitChange();
+  }
+
+  get repeat(): RepeatMode {
+    return this._repeat;
+  }
+
+  /** A plain-data copy of the queue, for persisting and `restore()`. */
+  snapshot(): QueueSnapshot {
+    const cur = this._currentTrack;
+    return {
+      entries: this._tracks.map((t) => ({
+        key: t.key,
+        url: t.sourceUrl,
+        metadata: t.metadata,
+        ...(t.skipHEAD ? { skipHEAD: true } : {}),
+      })),
+      currentKey: cur?.key ?? null,
+      currentTime: cur ? cur.currentTime : 0,
+      repeat: this._repeat,
+    };
+  }
+
+  /**
+   * Rebuild the queue from a snapshot and move to its position. Meant for a
+   * fresh or stopped queue (e.g. after a reload): unlike setEntries, it always
+   * seeks to the snapshot's time, even if its current entry is already current.
+   */
+  restore(snapshot: QueueSnapshot, opts: { play?: boolean } = {}): void {
+    this.setRepeat(snapshot.repeat);
+    const play = opts.play ?? false;
+    const current = this._currentTrack;
+    this.setEntries(snapshot.entries, {
+      startKey: snapshot.currentKey ?? undefined,
+      startTime: snapshot.currentTime || undefined,
+      play,
+    });
+    // setEntries keeps a surviving current track where it is; restore moves it.
+    if (snapshot.currentKey && current && current.key === snapshot.currentKey) {
+      this.goto(snapshot.currentKey, { play, startTime: snapshot.currentTime });
+    }
+  }
+
+  /**
+   * Listen for changes to the order, the current entry or the repeat mode.
+   * Not called for progress, play/pause or seeks. Called in a microtask after
+   * the edit, once per edit, with the final state. Returns an unsubscribe function.
+   */
+  onChange(listener: (change: QueueChange) => void): () => void {
+    // Nothing is tracked while nobody listens, so the first listener sets the
+    // baseline: it hears about changes from now on, not about the past.
+    if (this._changeListeners.size === 0) {
+      this._lastChange = {
+        version: this._orderVersion,
+        currentKey: this.currentKey,
+        repeat: this._repeat,
+      };
+    }
+    this._changeListeners.add(listener);
+    return () => this._changeListeners.delete(listener);
+  }
+
   get keys(): string[] {
     return this._tracks.map((t) => t.key);
   }
@@ -456,6 +543,7 @@ export class Queue implements TrackQueueRef {
     for (const track of this._tracks) track.destroy();
     this._tracks = [];
     this._actor.stop();
+    this._changeListeners.clear();
   }
 
   // --------------------------------------------------------------------------
@@ -576,13 +664,14 @@ export class Queue implements TrackQueueRef {
    */
   private _applyOrder(next: Track[]): void {
     const cur = this._currentTrack;
-    const prevNext = cur ? this._tracks[cur.index + 1] : undefined;
+    const prevNext = cur ? this._tracks[this._nextIndexOf(cur.index)] : undefined;
     this._tracks = next;
     next.forEach((t, i) => (t.index = i));
+    this._orderVersion++;
     const curIndex = cur ? next.indexOf(cur) : 0;
     if (curIndex === -1) throw new Error('_applyOrder: current track was dropped');
 
-    const newNext = next[curIndex + 1];
+    const newNext = next[this._nextIndexOf(curIndex)];
     const nextChanged = newNext !== prevNext;
     if (nextChanged) this._cancelScheduledGapless();
 
@@ -595,6 +684,67 @@ export class Queue implements TrackQueueRef {
       this._preloadAhead(curIndex);
       this._tryScheduleGapless(curIndex);
     }
+  }
+
+  /**
+   * The index that plays after `index`: the next one, wrapping to 0 under
+   * repeat 'all', or -1 at the end. Repeat 'one' is ignored here — skipping
+   * still moves on, and preloading still looks ahead.
+   */
+  private _nextIndexOf(index: number): number {
+    const n = this._tracks.length;
+    if (index + 1 < n) return index + 1;
+    if (this._repeat === 'all' && n > 1) return 0;
+    return -1;
+  }
+
+  /** The index whose gapless start can be scheduled after `index`, or -1. */
+  private _scheduleTargetIndex(index: number): number {
+    // Repeat 'one' restarts the same Track, which can't be scheduled against
+    // itself; the restart is handled by the machine instead.
+    if (this._repeat === 'one') return -1;
+    return this._nextIndexOf(index);
+  }
+
+  /** After a repeat change: drop a schedule that no longer applies, and look ahead again. */
+  private _rescheduleIfNextChanged(): void {
+    const snap = this._actor.getSnapshot();
+    const target = this._tracks[this._scheduleTargetIndex(snap.context.currentTrackIndex)];
+    if (this._scheduledNext && this._scheduledNext !== target) this._cancelScheduledGapless();
+    if (snap.value === 'playing') {
+      this._preloadAhead(snap.context.currentTrackIndex);
+      this._tryScheduleGapless(snap.context.currentTrackIndex);
+    }
+  }
+
+  /**
+   * Change events are batched into a microtask: an edit that takes several
+   * machine transitions reports once, with its final state, and listeners can
+   * edit the queue without re-entering a transition in progress.
+   */
+  private _emitChange(): void {
+    if (this._changeListeners.size === 0 || this._changePending) return;
+    this._changePending = true;
+    queueMicrotask(() => {
+      this._changePending = false;
+      this._flushChange();
+    });
+  }
+
+  private _flushChange(): void {
+    if (this._changeListeners.size === 0) return;
+    const currentKey = this.currentKey;
+    const last = this._lastChange;
+    if (
+      last &&
+      last.version === this._orderVersion &&
+      last.currentKey === currentKey &&
+      last.repeat === this._repeat
+    )
+      return;
+    this._lastChange = { version: this._orderVersion, currentKey, repeat: this._repeat };
+    const change: QueueChange = { keys: this.keys, currentKey, repeat: this._repeat };
+    for (const listener of this._changeListeners) listener(change);
   }
 
   private _createTrack(e: Entry): Track {
@@ -685,13 +835,18 @@ export class Queue implements TrackQueueRef {
       cur.isPlaying &&
       cur.currentTime < (isNaN(cur.duration) ? 15 : Math.min(cur.duration * 0.2, 15));
 
-    const limit = fromIndex + this._preloadNumTracks + 1;
     this.onDebug(
-      `_preloadAhead(${fromIndex}) limit=${limit} trackCount=${this._tracks.length} belowThreshold=${curBelowThreshold}`
+      `_preloadAhead(${fromIndex}) ahead=${this._preloadNumTracks} trackCount=${this._tracks.length} belowThreshold=${curBelowThreshold}`
     );
-    for (let i = fromIndex + 1; i < this._tracks.length && i < limit; i++) {
+    // Walk forward in play order (wrapping under repeat 'all'), never past
+    // the current track.
+    for (
+      let step = 1, i = this._nextIndexOf(fromIndex);
+      step <= this._preloadNumTracks && i !== -1 && i !== fromIndex;
+      step++, i = this._nextIndexOf(i)
+    ) {
       const t = this._tracks[i];
-      if (i > fromIndex + 1 && curBelowThreshold) {
+      if (step > 1 && curBelowThreshold) {
         this.onDebug(
           `_preloadAhead: deferring track ${i} (current at ${cur.currentTime.toFixed(1)}s, below threshold)`
         );
@@ -724,8 +879,8 @@ export class Queue implements TrackQueueRef {
     const ctx = getAudioContext();
     if (!ctx || this.playbackMethod === 'HTML5_ONLY') return;
 
-    const nextIndex = curIndex + 1;
-    if (nextIndex >= this._tracks.length) return;
+    const nextIndex = this._scheduleTargetIndex(curIndex);
+    if (nextIndex === -1) return;
 
     const current = this._tracks[curIndex];
     const next = this._tracks[nextIndex];

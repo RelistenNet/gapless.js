@@ -56,7 +56,7 @@ export class Track {
 
   private _trackUrl: string;
   private _resolvedUrl: string;
-  private readonly skipHEAD: boolean;
+  readonly skipHEAD: boolean;
   /** Temporary holder between fetch and decode steps (unserializable — stays on Track class). */
   private _pendingArrayBuffer: ArrayBuffer | null = null;
 
@@ -506,6 +506,11 @@ export class Track {
 
   get trackUrl(): string {
     return this._resolvedUrl;
+  }
+
+  /** The URL the track was created with, before any redirect was resolved. */
+  get sourceUrl(): string {
+    return this._trackUrl;
   }
 
   get playbackType(): PlaybackType {
