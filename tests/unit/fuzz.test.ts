@@ -77,39 +77,55 @@ function pickOp(rand: () => number, weights: Weights): OpName {
 
 function checkInvariants(queue: Queue, opDescription: string, seed: number): void {
   const snap = queue.queueSnapshot;
-  const tracks = (queue as unknown as { _tracks: { index: number }[] })._tracks;
+  type T = {
+    key: string;
+    webAudioLoadingState: string;
+    _actor: { getSnapshot(): { children: Record<string, { getSnapshot(): { value: unknown } }> } };
+  };
+  const internal = queue as unknown as {
+    _tracks: T[];
+    _scheduledNext: T | null;
+    _actor: { getSnapshot(): { context: { current: T | null } } };
+  };
+  const tracks = internal._tracks;
   const trackCount = tracks.length;
+  // The machine's own idea of the current track, not a value derived from it.
+  const current = internal._actor.getSnapshot().context.current;
+  const currentIndex = current ? tracks.indexOf(current) : -1;
   const label = `[seed=${seed}] after ${opDescription}`;
+
+  // An independent spec of "what plays after position i", to check the
+  // queue's scheduling and preloading against.
+  const nextPos = (i: number) =>
+    i + 1 < trackCount ? i + 1 : queue.repeat === 'all' && trackCount > 1 ? 0 : -1;
 
   // 1. State is one of the valid states
   const validStates = ['idle', 'playing', 'paused', 'ended'];
   expect(validStates.includes(snap.state), `${label}: Invalid state "${snap.state}"`).toBe(true);
 
-  // 2. Machine trackCount matches actual tracks length
-  expect(
-    snap.context.trackCount,
-    `${label}: trackCount mismatch machine=${snap.context.trackCount} actual=${trackCount}`
-  ).toBe(trackCount);
-
-  // 3. currentTrackIndex is in bounds (0 <= idx < trackCount, or >= 0 when empty)
-  expect(
-    snap.context.currentTrackIndex,
-    `${label}: currentTrackIndex ${snap.context.currentTrackIndex} < 0`
-  ).toBeGreaterThanOrEqual(0);
+  // 2. The machine's current track is in the queue, and is null only when
+  //    the queue is empty.
   if (trackCount > 0) {
-    expect(
-      snap.context.currentTrackIndex,
-      `${label}: currentTrackIndex ${snap.context.currentTrackIndex} >= trackCount ${trackCount}`
-    ).toBeLessThan(trackCount);
+    expect(current, `${label}: no current track with ${trackCount} tracks`).not.toBeNull();
+    expect(currentIndex, `${label}: current track ${current?.key} is not in the queue`).not.toBe(
+      -1
+    );
+  } else {
+    expect(current, `${label}: current track ${current?.key} in an empty queue`).toBeNull();
   }
 
-  // 4. Internal _tracks[i].index === i (sequential indices)
-  for (let i = 0; i < trackCount; i++) {
-    expect(
-      tracks[i].index,
-      `${label}: _tracks[${i}].index is ${tracks[i].index}, expected ${i}`
-    ).toBe(i);
-  }
+  // 3. Positions reported publicly match the array.
+  expect(
+    queue.currentTrackIndex,
+    `${label}: currentTrackIndex ${queue.currentTrackIndex} != position of current ${currentIndex}`
+  ).toBe(Math.max(0, currentIndex));
+  expect(queue.currentKey, `${label}: currentKey mismatch`).toBe(current?.key ?? null);
+  expect(snap.context.trackCount, `${label}: trackCount mismatch`).toBe(trackCount);
+
+  // 4. TrackInfo.index is each track's position.
+  queue.tracks.forEach((info, i) => {
+    expect(info.index, `${label}: tracks[${i}].index is ${info.index}`).toBe(i);
+  });
 
   // 5. "playing" or "paused" with 0 tracks is invalid
   if (trackCount === 0) {
@@ -119,12 +135,12 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
     ).toBe(false);
   }
 
-  // 6. "ended" state should only occur at or past the last track
+  // 6. "ended" only when nothing plays after the current track.
   if (snap.state === 'ended' && trackCount > 0) {
     expect(
-      snap.context.currentTrackIndex,
-      `${label}: ended state but currentTrackIndex ${snap.context.currentTrackIndex} is not last (trackCount=${trackCount})`
-    ).toBeGreaterThanOrEqual(trackCount - 1);
+      currentIndex === trackCount - 1 || nextPos(currentIndex) === -1,
+      `${label}: ended at ${current?.key} (position ${currentIndex} of ${trackCount})`
+    ).toBe(true);
   }
 
   // 7. volume should always be in [0, 1]
@@ -141,31 +157,21 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
     expect(queue.isPlaying, `${label}: isPlaying should be false in paused state`).toBe(false);
   }
 
-  // 9. currentTrackIndex getter should match machine context
-  expect(
-    queue.currentTrackIndex,
-    `${label}: public currentTrackIndex getter ${queue.currentTrackIndex} != machine ${snap.context.currentTrackIndex}`
-  ).toBe(snap.context.currentTrackIndex);
-
   // 10. tracks.length should match internal _tracks.length
   expect(
     queue.tracks.length,
     `${label}: public tracks.length ${queue.tracks.length} != internal ${trackCount}`
   ).toBe(trackCount);
 
-  // 11b. The scheduled gapless track (if any) is still in the queue, and is
-  // the track that plays after the current one (current + 1, or 0 across a
+  // 11b. The scheduled gapless track (if any) is in the queue and is the track
+  // that plays after the current one (the next, or the first across a
   // repeat-'all' wrap) — never a stale or reordered one. Repeat 'one' never
   // schedules.
-  const internal = queue as unknown as {
-    _scheduledNext: unknown;
-    _scheduleTargetIndex(i: number): number;
-  };
   if (internal._scheduledNext !== null) {
-    const expected = internal._scheduleTargetIndex(snap.context.currentTrackIndex);
+    const expected = queue.repeat === 'one' ? -1 : nextPos(currentIndex);
     expect(expected, `${label}: a track is scheduled but none should be`).not.toBe(-1);
     expect(
-      tracks.indexOf(internal._scheduledNext as { index: number }),
+      tracks.indexOf(internal._scheduledNext),
       `${label}: scheduled track is not the one after current (repeat=${queue.repeat})`
     ).toBe(expected);
   }
@@ -173,24 +179,16 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
   // 11e. No track outside the preload window (current + next preloadNumTracks
   // in play order) is still downloading: displaced downloads are aborted.
   // Decoding is allowed to finish (the bytes are already here).
-  if (trackCount > 0 && snap.state !== 'ended') {
-    const inWindow = new Set<number>([snap.context.currentTrackIndex]);
-    const q = queue as unknown as { _nextIndexOf(i: number): number };
+  if (currentIndex !== -1 && snap.state !== 'ended') {
+    const inWindow = new Set<number>([currentIndex]);
     for (
-      let step = 1, i = q._nextIndexOf(snap.context.currentTrackIndex);
-      step <= queue.preloadNumTracks && i !== -1 && i !== snap.context.currentTrackIndex;
-      step++, i = q._nextIndexOf(i)
+      let step = 1, i = nextPos(currentIndex);
+      step <= queue.preloadNumTracks && i !== -1 && i !== currentIndex;
+      step++, i = nextPos(i)
     ) {
       inWindow.add(i);
     }
-    const all = tracks as unknown as {
-      key: string;
-      webAudioLoadingState: string;
-      _actor: {
-        getSnapshot(): { children: Record<string, { getSnapshot(): { value: unknown } }> };
-      };
-    }[];
-    all.forEach((t, i) => {
+    tracks.forEach((t, i) => {
       if (inWindow.has(i) || t.webAudioLoadingState !== 'LOADING') return;
       const stage = t._actor.getSnapshot().children.fetchDecode?.getSnapshot().value;
       expect(
@@ -199,12 +197,6 @@ function checkInvariants(queue: Queue, opDescription: string, seed: number): voi
       ).toBe(false);
     });
   }
-
-  // 11d. The machine agrees on the repeat mode.
-  expect(
-    (snap.context as { repeat?: string }).repeat ?? 'off',
-    `${label}: machine repeat mismatch`
-  ).toBe(queue.repeat);
 
   // 11c. Keys are unique.
   const keys = queue.keys;
@@ -282,7 +274,7 @@ function executeOp(queue: Queue, op: OpName, rand: () => number): string {
       ];
       if (currentTrack) {
         queue.onTrackEnded(currentTrack as never);
-        return `trackEnded(track=${currentTrack.index})`;
+        return `trackEnded(track=${(currentTrack as unknown as { key: string }).key})`;
       }
       return 'trackEnded(skip-no-current)';
     }
@@ -831,7 +823,7 @@ describe('Bug regressions', () => {
 
       // Grab reference to track at index 0
       const trackA = getTracks(q)[0];
-      expect(trackA.index).toBe(0);
+      expect(getTracks(q).indexOf(trackA)).toBe(0);
 
       // Navigate to track 1, then remove track 0
       q.gotoTrack(1, true);

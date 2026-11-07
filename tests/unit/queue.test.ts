@@ -505,7 +505,8 @@ describe('Queue media session position updates via onProgress', () => {
     const q = new Queue({ tracks: ['a.mp3'], onProgress: spy });
     q.play();
     // Manually fire onProgress like the progress loop would
-    q.onProgress({ index: 0, currentTime: 10, duration: 120 } as TrackInfo);
+    const [a] = (q as unknown as { _tracks: never[] })._tracks;
+    q.onProgress(a, { index: 0, currentTime: 10, duration: 120 } as TrackInfo);
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ currentTime: 10, duration: 120 }));
   });
 
@@ -514,7 +515,8 @@ describe('Queue media session position updates via onProgress', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3'], onProgress: spy });
     q.play();
     // Report from track 1, but current track is 0 — should be ignored
-    q.onProgress({ index: 1, currentTime: 5, duration: 60 } as TrackInfo);
+    const [, b] = (q as unknown as { _tracks: never[] })._tracks;
+    q.onProgress(b, { index: 1, currentTime: 5, duration: 60 } as TrackInfo);
     expect(spy).not.toHaveBeenCalled();
   });
 });

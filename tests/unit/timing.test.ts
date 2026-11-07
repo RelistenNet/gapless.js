@@ -27,19 +27,20 @@ function makeQueue(overrides: Partial<TrackQueueRef> = {}): TrackQueueRef {
     volume: 1,
     playbackMethod: 'HYBRID' as const,
     playbackRate: 1,
-    currentTrackIndex: 0,
+    currentKey: null,
+    indexOf: () => 0,
     ...overrides,
   };
 }
 
 describe('Track currentTime', () => {
   it('returns 0 before play()', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     expect(t.currentTime).toBe(0);
   });
 
   it('returns html5 currentTime before WebAudio loads', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     // Simulate HTML5 element advancing
     const audioEl = t.audio as unknown as MockAudioElement;
     audioEl.currentTime = 15;
@@ -50,7 +51,7 @@ describe('Track currentTime', () => {
   it('returns frozen time when paused on WebAudio', async () => {
     const ctx = (globalThis as unknown as { _mockAudioContext: MockAudioContext })
       ._mockAudioContext;
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
 
     // Inject a mock buffer directly to skip the fetch pipeline
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
@@ -73,7 +74,7 @@ describe('Track currentTime', () => {
   });
 
   it('resumes from correct position after pause/play on WebAudio', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
     t.play();
@@ -90,7 +91,7 @@ describe('Track currentTime', () => {
   });
 
   it('resets correctly after seek', async () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
     t.play();
@@ -105,7 +106,7 @@ describe('Track currentTime', () => {
   });
 
   it('clamps seek to duration', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
     t.play();
     t.seek(999);
@@ -113,7 +114,7 @@ describe('Track currentTime', () => {
   });
 
   it('clamps seek to 0', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
     t.play();
     advanceTime(30);
@@ -122,7 +123,7 @@ describe('Track currentTime', () => {
   });
 
   it('reflects playbackRate in WebAudio currentTime', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue({ playbackRate: 2 }) });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue({ playbackRate: 2 }) });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
     t.play();
     advanceTime(10); // 10 wall-clock seconds at 2x = 20 track seconds
@@ -130,7 +131,7 @@ describe('Track currentTime', () => {
   });
 
   it('reflects playbackRate after seek', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue({ playbackRate: 2 }) });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue({ playbackRate: 2 }) });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
     t.play();
     t.seek(100);
@@ -141,7 +142,6 @@ describe('Track currentTime', () => {
   it('reflects playbackRate after pause/resume', () => {
     const t = new Track({
       trackUrl: 'test.mp3',
-      index: 0,
       queue: makeQueue({ playbackRate: 1.5 }),
     });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
@@ -156,7 +156,7 @@ describe('Track currentTime', () => {
   });
 
   it('reflects playbackRate in scheduleGaplessStart', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue({ playbackRate: 2 }) });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue({ playbackRate: 2 }) });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
     advanceTime(10);
     t.scheduleGaplessStart(10); // starts at ctx.currentTime = 10
@@ -166,7 +166,7 @@ describe('Track currentTime', () => {
 
   it('reflects mid-playback rate change', () => {
     const q = makeQueue({ playbackRate: 1 });
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: q });
+    const t = new Track({ trackUrl: 'test.mp3', queue: q });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
     t.play();
     advanceTime(10); // 10s at 1x = 10 track seconds
@@ -181,18 +181,18 @@ describe('Track currentTime', () => {
 
 describe('Track duration', () => {
   it('returns NaN before metadata loads', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     expect(isNaN(t.duration)).toBe(true);
   });
 
   it('returns audioBuffer.duration when buffer is loaded', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(245.5) as unknown as AudioBuffer;
     expect(t.duration).toBeCloseTo(245.5);
   });
 
   it('prefers audioBuffer.duration over html5 duration in idle state', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     const audio = t.audio as unknown as MockAudioElement;
     audio.duration = 100;
     t.audioBuffer = new MockAudioBuffer(245.5) as unknown as AudioBuffer;
@@ -203,7 +203,7 @@ describe('Track duration', () => {
     // When playing via HTML5, duration must match the audio.currentTime clock.
     // audioBuffer.duration can differ (codec padding, VBR headers), which
     // causes gapless scheduling to start the next track too early or late.
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     const audio = t.audio as unknown as MockAudioElement;
     audio.duration = 300.5; // HTML5 reports slightly longer duration
     t.audioBuffer = new MockAudioBuffer(300.0) as unknown as AudioBuffer;
@@ -240,7 +240,7 @@ describe('Track mid-stream HTML5 → Web Audio crossover', () => {
   }
 
   it('BUFFER_READY during HTML5 playback pauses HTML5 and starts WebAudio at offset', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     const audio = t.audio as unknown as MockAudioElement;
     audio.duration = 300;
 
@@ -268,7 +268,7 @@ describe('Track mid-stream HTML5 → Web Audio crossover', () => {
   });
 
   it('crossover preserves playback position — no jump in currentTime', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     const audio = t.audio as unknown as MockAudioElement;
     audio.duration = 300;
 
@@ -291,7 +291,7 @@ describe('Track mid-stream HTML5 → Web Audio crossover', () => {
   });
 
   it('BUFFER_READY while paused crosses over but does not start source node', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     const audio = t.audio as unknown as MockAudioElement;
     audio.duration = 300;
 
@@ -323,7 +323,7 @@ describe('Track mid-stream HTML5 → Web Audio crossover', () => {
     // scheduling was deferred or used an imprecise HTML5 prediction) — after
     // the crossover, the flag must be clear so the webaudio progress loop can
     // re-trigger with accurate timing.
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     const audio = t.audio as unknown as MockAudioElement;
     audio.duration = 300;
     t.play();
@@ -355,7 +355,7 @@ describe('Track scheduleGaplessStart', () => {
   // _isUsingWebAudio to return false, so progress was never reported.
 
   it('puts track machine into webaudio state (not html5)', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
     advanceTime(10); // ctx.currentTime = 10
@@ -365,7 +365,7 @@ describe('Track scheduleGaplessStart', () => {
   });
 
   it('currentTime uses WebAudio clock after scheduleGaplessStart', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
     advanceTime(10); // ctx.currentTime = 10
@@ -377,7 +377,7 @@ describe('Track scheduleGaplessStart', () => {
   });
 
   it('currentTime does NOT read from stale audio.currentTime after scheduleGaplessStart', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
     // Poison the HTML5 element currentTime — should be ignored
@@ -392,7 +392,7 @@ describe('Track scheduleGaplessStart', () => {
   });
 
   it('isPlaying is true after scheduleGaplessStart', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
     advanceTime(5);
@@ -406,7 +406,7 @@ describe('Track scheduleGaplessStart', () => {
     // Then PLAY_WEBAUDIO from scheduleGaplessStart was silently dropped because
     // webaudio state had no PLAY_WEBAUDIO handler. Result: isPlaying stayed
     // false, progress loop exited immediately, UI showed frozen progress.
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
 
     // Simulate the preload path: buffer arrives while track is in loading state
     t.preload(); // idle → loading
@@ -426,7 +426,7 @@ describe('Track scheduleGaplessStart', () => {
   it('startProgressLoop() triggers onProgress callback', async () => {
     const onProgress = vi.fn();
     const q = makeQueue({ onProgress });
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: q });
+    const t = new Track({ trackUrl: 'test.mp3', queue: q });
     t.audioBuffer = new MockAudioBuffer(300) as unknown as AudioBuffer;
 
     advanceTime(5);
@@ -445,7 +445,7 @@ describe('Track scheduleGaplessStart', () => {
 
 describe('Track isPaused', () => {
   it('reflects html5 paused state before buffer loads', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     const audio = t.audio as unknown as MockAudioElement;
     audio.paused = true;
     expect(t.isPaused).toBe(true);
@@ -454,7 +454,7 @@ describe('Track isPaused', () => {
   });
 
   it('is true after pause() on webaudio', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
     t.play();
     t.pause();
@@ -462,7 +462,7 @@ describe('Track isPaused', () => {
   });
 
   it('is false after play()', () => {
-    const t = new Track({ trackUrl: 'test.mp3', index: 0, queue: makeQueue() });
+    const t = new Track({ trackUrl: 'test.mp3', queue: makeQueue() });
     t.audioBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
     t.play();
     expect(t.isPaused).toBe(false);

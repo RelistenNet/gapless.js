@@ -11,6 +11,7 @@ import {
   updateMediaSessionPositionState,
 } from './utils/mediaSession';
 import { createQueueMachine } from './machines/queue.machine';
+import type { PlayList } from './machines/queue.machine';
 import { Track } from './Track';
 import type { TrackQueueRef } from './Track';
 import { throttle } from './utils/throttle';
@@ -105,7 +106,7 @@ export class Queue implements TrackQueueRef {
 
   /** @internal Index of the scheduled track (debugging and tests). */
   get _scheduledNextIndex(): number | null {
-    return this._scheduledNext?.index ?? null;
+    return this._scheduledNext ? this._tracks.indexOf(this._scheduledNext) : null;
   }
   set _scheduledNextIndex(index: number | null) {
     this._scheduledNext = index === null ? null : (this._tracks[index] ?? null);
@@ -154,7 +155,6 @@ export class Queue implements TrackQueueRef {
       (url, i) =>
         new Track({
           trackUrl: url,
-          index: i,
           queue: this,
           key: `gapless-${++this._keySeq}`,
           metadata: trackMetadata[i],
@@ -169,78 +169,83 @@ export class Queue implements TrackQueueRef {
     // Do NOT use this._actor.getSnapshot() inside actions — that returns the
     // pre-transition snapshot and won't reflect intermediate assign() updates.
     // -----------------------------------------------------------------------
-    const machine = createQueueMachine({
-      currentTrackIndex: 0,
-      trackCount: this._tracks.length,
-      repeat: this._repeat,
+    // The machine asks the queue about order; repeat lives here, in _nextOf.
+    const list: PlayList<Track> = {
+      next: (t) => this._nextOf(t),
+      previous: (t) => this._tracks[this._tracks.indexOf(t) - 1] ?? null,
+      first: () => this._tracks[0] ?? null,
+      size: () => this._tracks.length,
+      repeatsCurrent: () =>
+        this._repeat === 'one' || (this._repeat === 'all' && this._tracks.length === 1),
+    };
+
+    const machine = createQueueMachine<Track>({
+      current: this._tracks[0] ?? null,
+      list,
     }).provide({
       actions: {
         deactivateCurrent: ({ context }) => {
-          this._trackAt(context.currentTrackIndex)?.deactivate();
+          context.current?.deactivate();
         },
         deactivateEndedTrack: ({ context }) => {
-          this._trackAt(context.currentTrackIndex)?.deactivate();
+          context.current?.deactivate();
         },
         activateCurrent: ({ context }) => {
-          this._trackAt(context.currentTrackIndex)?.activate();
+          context.current?.activate();
         },
         playOrContinueGapless: ({ context }) => {
-          const cur = this._trackAt(context.currentTrackIndex);
+          const cur = context.current;
           if (!cur) return;
           if (this._scheduledNext !== cur) {
             cur.play();
           } else {
             this._scheduledNext = null;
             this.onDebug(
-              `onTrackEnded: gapless track ${cur.index} — sourceNode=${cur.hasSourceNode} isPlaying=${cur.isPlaying} machineState=${cur.machineState}`
+              `onTrackEnded: gapless track ${cur.key} — sourceNode=${cur.hasSourceNode} isPlaying=${cur.isPlaying} machineState=${cur.machineState}`
             );
             cur.startProgressLoop();
           }
         },
         cancelAllGapless: () => this._cancelScheduledGapless(),
         notifyStartNewTrack: ({ context }) => {
-          const cur = this._trackAt(context.currentTrackIndex);
-          if (cur) this._onStartNewTrack?.(cur.toInfo());
+          if (context.current) this._onStartNewTrack?.(context.current.toInfo());
         },
         notifyPlayNextTrack: ({ context }) => {
-          const cur = this._trackAt(context.currentTrackIndex);
-          if (cur) this._onPlayNextTrack?.(cur.toInfo());
+          if (context.current) this._onPlayNextTrack?.(context.current.toInfo());
         },
         notifyPlayPreviousTrack: ({ context }) => {
-          const cur = this._trackAt(context.currentTrackIndex);
-          if (cur) this._onPlayPreviousTrack?.(cur.toInfo());
+          if (context.current) this._onPlayPreviousTrack?.(context.current.toInfo());
         },
         notifyEnded: () => this._onEnded?.(),
         updateMediaSessionMetadata: ({ context }) => {
-          const cur = this._trackAt(context.currentTrackIndex);
-          if (cur) updateMediaSessionMetadata(cur.metadata);
+          if (context.current) updateMediaSessionMetadata(context.current.metadata);
         },
         preloadAhead: ({ context }) => {
-          this._preloadAhead(context.currentTrackIndex);
+          this._preloadAhead(context.current);
         },
         playCurrent: ({ context }) => {
-          this._trackAt(context.currentTrackIndex)?.play();
+          context.current?.play();
         },
         pauseCurrent: ({ context }) => {
-          this._trackAt(context.currentTrackIndex)?.pause();
+          context.current?.pause();
         },
         seekCurrent: ({ context, event }) => {
           const e = event as { type: 'SEEK'; time: number };
-          this._trackAt(context.currentTrackIndex)?.seek(e.time);
+          context.current?.seek(e.time);
         },
         seekCurrentToStartTime: ({ context, event }) => {
           const e = event as { type: 'GOTO'; startTime?: number };
-          this._trackAt(context.currentTrackIndex)?.seek(e.startTime ?? 0);
+          context.current?.seek(e.startTime ?? 0);
         },
         scheduleGapless: ({ context }) => {
-          this._tryScheduleGapless(context.currentTrackIndex);
+          this._tryScheduleGapless(context.current);
         },
         cancelScheduledGapless: () => {
           this._cancelScheduledGapless();
         },
         cancelAndRescheduleGapless: ({ context }) => {
           this._cancelScheduledGapless();
-          this._tryScheduleGapless(context.currentTrackIndex);
+          this._tryScheduleGapless(context.current);
         },
       },
     });
@@ -307,8 +312,8 @@ export class Queue implements TrackQueueRef {
   }
 
   next(): void {
-    const snap = this._actor.getSnapshot();
-    if (this._nextIndexOf(snap.context.currentTrackIndex) === -1) return;
+    const cur = this._currentTrack;
+    if (!cur || this._nextOf(cur) === null) return;
 
     this._actor.send({ type: 'NEXT' });
   }
@@ -324,11 +329,12 @@ export class Queue implements TrackQueueRef {
   }
 
   gotoTrack(index: number, playImmediately = false, startTime?: number): void {
-    if (index < 0 || index >= this._tracks.length) return;
+    const track = this._tracks[index];
+    if (!track) return;
     this.onDebug(
-      `gotoTrack(${index}, playImmediately=${playImmediately}, startTime=${startTime}) queueState=${this._actor.getSnapshot().value} curIdx=${this._actor.getSnapshot().context.currentTrackIndex}`
+      `gotoTrack(${index} = ${track.key}, playImmediately=${playImmediately}, startTime=${startTime}) queueState=${this._actor.getSnapshot().value} current=${this.currentKey}`
     );
-    this._actor.send({ type: 'GOTO', index, playImmediately, startTime });
+    this._actor.send({ type: 'GOTO', track, playImmediately, startTime });
   }
 
   seek(time: number): void {
@@ -346,28 +352,22 @@ export class Queue implements TrackQueueRef {
     this._playbackRate = clamped;
     this._currentTrack?.setPlaybackRate(clamped);
     this._cancelScheduledGapless();
-    const snap = this._actor.getSnapshot();
-    if (snap.value === 'playing') {
-      this._tryScheduleGapless(snap.context.currentTrackIndex);
-    }
+    if (this.isPlaying) this._tryScheduleGapless(this._currentTrack);
   }
 
   addTrack(url: string, options: AddTrackOptions = {}): void {
     if (options.key !== undefined) this._assertUniqueKeys([options.key], true);
-    const index = this._tracks.length;
     const metadata = options.metadata ?? ({} as TrackMetadata);
-    this._tracks.push(
-      new Track({
-        trackUrl: url,
-        index,
-        queue: this,
-        key: options.key ?? this._newKey(),
-        skipHEAD: options.skipHEAD,
-        metadata,
-      })
-    );
+    const track = new Track({
+      trackUrl: url,
+      queue: this,
+      key: options.key ?? this._newKey(),
+      skipHEAD: options.skipHEAD,
+      metadata,
+    });
+    this._tracks.push(track);
     this._orderVersion++;
-    this._actor.send({ type: 'ADD_TRACK' });
+    this._actor.send({ type: 'LIST_CHANGED', current: this._currentTrack ?? track });
     // Appending can change what plays next: on the last track it becomes the
     // new entry, and under repeat 'all' that replaces a scheduled wrap to 0.
     this._rescheduleIfNextChanged();
@@ -378,10 +378,12 @@ export class Queue implements TrackQueueRef {
     const removed = this._tracks[index];
     removed.destroy();
     this._tracks.splice(index, 1);
-    for (let i = index; i < this._tracks.length; i++) this._tracks[i].index = i;
     if (this._scheduledNext === removed) this._scheduledNext = null;
     this._orderVersion++;
-    this._actor.send({ type: 'REMOVE_TRACK', index });
+    // If it was current, the track that took its place plays next (or, if it
+    // was last, the one before it).
+    const successor = this._tracks[index] ?? this._tracks[index - 1] ?? null;
+    this._actor.send({ type: 'REMOVE_TRACK', track: removed, successor });
   }
 
   // --------------------------------------------------------------------------
@@ -419,15 +421,16 @@ export class Queue implements TrackQueueRef {
     cur?.deactivate();
     for (const t of this._tracks) if (!kept.has(t)) this._dropTrack(t);
     this._tracks = next;
-    next.forEach((t, i) => (t.index = i));
     this._orderVersion++;
-    const startIndex = Math.max(0, opts.startKey ? this._indexOfKey(opts.startKey) : 0);
-    this._actor.send({ type: 'SYNC', currentTrackIndex: startIndex, trackCount: next.length });
-    if (next.length === 0) return;
+    const start =
+      (opts.startKey ? next.find((t) => t.key === opts.startKey) : undefined) ?? next[0] ?? null;
+    const play = opts.play ?? this.isPlaying;
+    this._actor.send({ type: 'LIST_CHANGED', current: start });
+    if (!start) return;
     this._actor.send({
       type: 'GOTO',
-      index: startIndex,
-      playImmediately: opts.play ?? this.isPlaying,
+      track: start,
+      playImmediately: play,
       startTime: opts.startTime,
     });
   }
@@ -476,7 +479,6 @@ export class Queue implements TrackQueueRef {
   setRepeat(mode: RepeatMode): void {
     if (mode === this._repeat) return;
     this._repeat = mode;
-    this._actor.send({ type: 'SET_REPEAT', repeat: mode });
     this._rescheduleIfNextChanged();
     this._emitChange();
   }
@@ -571,8 +573,10 @@ export class Queue implements TrackQueueRef {
     return this._currentTrack?.toInfo();
   }
 
+  /** Position of the current track in play order (0 when the queue is empty). */
   get currentTrackIndex(): number {
-    return this._actor.getSnapshot().context.currentTrackIndex;
+    const cur = this._currentTrack;
+    return cur ? Math.max(0, this._tracks.indexOf(cur)) : 0;
   }
 
   get tracks(): readonly TrackInfo[] {
@@ -597,11 +601,10 @@ export class Queue implements TrackQueueRef {
 
   set preloadNumTracks(value: number) {
     this._preloadNumTracks = Math.max(0, value);
-    const snap = this._actor.getSnapshot();
-    if (snap.value === 'playing') {
-      this._preloadAhead(snap.context.currentTrackIndex);
+    if (this.isPlaying) {
+      this._preloadAhead(this._currentTrack);
     } else {
-      this._cancelPreloadsOutsideWindow(snap.context.currentTrackIndex);
+      this._cancelPreloadsOutsideWindow(this._currentTrack);
     }
   }
 
@@ -609,13 +612,20 @@ export class Queue implements TrackQueueRef {
     return this._playbackRate;
   }
 
-  /** Snapshot of the queue state machine (state name + context). For debugging. */
+  /** The queue machine's state name, with positions derived for debugging. */
   get queueSnapshot(): {
     state: string;
-    context: { currentTrackIndex: number; trackCount: number };
+    context: { currentTrackIndex: number; trackCount: number; currentKey: string | null };
   } {
     const snap = this._actor.getSnapshot();
-    return { state: snap.value as string, context: snap.context };
+    return {
+      state: snap.value as string,
+      context: {
+        currentTrackIndex: this.currentTrackIndex,
+        trackCount: this._tracks.length,
+        currentKey: this.currentKey,
+      },
+    };
   }
 
   // --------------------------------------------------------------------------
@@ -625,26 +635,23 @@ export class Queue implements TrackQueueRef {
   onTrackEnded(track: Track): void {
     const snap = this._actor.getSnapshot();
     this.onDebug(
-      `onTrackEnded track=${track.index} queueState=${snap.value} curIdx=${snap.context.currentTrackIndex}`
+      `onTrackEnded track=${track.key} queueState=${snap.value} current=${this.currentKey}`
     );
-    // Compare object identity, not just index — after removeTrack(), a
-    // different track may occupy the same index as the ended track.
-    if (track !== this._trackAt(snap.context.currentTrackIndex)) return;
+    if (track !== snap.context.current) return;
 
     this._actor.send({ type: 'TRACK_ENDED' });
-    const newSnap = this._actor.getSnapshot();
     this.onDebug(
-      `onTrackEnded after TRACK_ENDED → queueState=${newSnap.value} curIdx=${newSnap.context.currentTrackIndex}`
+      `onTrackEnded after TRACK_ENDED → queueState=${this._actor.getSnapshot().value} current=${this.currentKey}`
     );
   }
 
   onTrackBufferReady(track: Track): void {
     if (!this._owns(track)) return;
-    this._actor.send({ type: 'TRACK_LOADED', index: track.index });
+    this._actor.send({ type: 'TRACK_LOADED', track });
   }
 
-  onProgress(info: TrackInfo): void {
-    if (info.index !== this._actor.getSnapshot().context.currentTrackIndex) return;
+  onProgress(track: Track, info: TrackInfo): void {
+    if (track !== this._currentTrack) return;
     if (!isNaN(info.duration)) {
       this._throttledUpdatePositionState(info.duration, info.currentTime, this._playbackRate);
     }
@@ -661,10 +668,12 @@ export class Queue implements TrackQueueRef {
   }
 
   onPreloadReady(track: Track): void {
-    if (!this._owns(track)) return;
-    const snap = this._actor.getSnapshot();
-    if (track.index !== snap.context.currentTrackIndex) return;
-    this._preloadAhead(snap.context.currentTrackIndex);
+    if (track !== this._currentTrack) return;
+    this._preloadAhead(track);
+  }
+
+  indexOf(track: Track): number {
+    return this._tracks.indexOf(track);
   }
 
   onDebug(msg: string): void {
@@ -677,68 +686,67 @@ export class Queue implements TrackQueueRef {
 
   /**
    * Rearrange the play order without changing which track is current. Every
-   * key-based edit that keeps the current track goes through here; the
-   * machine and the scheduler still think in indices, and this is the one
-   * place that keeps them consistent.
+   * key-based edit that keeps the current track goes through here.
    */
   private _applyOrder(next: Track[]): void {
-    const cur = this._currentTrack;
-    const prevNext = cur ? this._tracks[this._nextIndexOf(cur.index)] : undefined;
+    const cur = this._currentTrack ?? null;
+    const prevNext = cur ? this._nextOf(cur) : null;
     this._tracks = next;
-    next.forEach((t, i) => (t.index = i));
     this._orderVersion++;
-    const curIndex = cur ? next.indexOf(cur) : 0;
-    if (curIndex === -1) throw new Error('_applyOrder: current track was dropped');
+    if (cur && !next.includes(cur)) throw new Error('_applyOrder: current track was dropped');
+    const current = cur ?? next[0] ?? null;
 
-    const newNext = next[this._nextIndexOf(curIndex)];
+    const newNext = current ? this._nextOf(current) : null;
     const nextChanged = newNext !== prevNext;
     if (nextChanged) this._cancelScheduledGapless();
 
-    this._actor.send({ type: 'SYNC', currentTrackIndex: curIndex, trackCount: next.length });
+    this._actor.send({ type: 'LIST_CHANGED', current });
     this.onDebug(
-      `_applyOrder: ${next.length} tracks, current=${curIndex} nextChanged=${nextChanged}`
+      `_applyOrder: ${next.length} tracks, current=${current?.key ?? null} nextChanged=${nextChanged}`
     );
 
     if (nextChanged && this.isPlaying) {
-      this._preloadAhead(curIndex);
-      this._tryScheduleGapless(curIndex);
+      this._preloadAhead(current);
+      this._tryScheduleGapless(current);
     } else {
       // "Next" is unchanged, but a move can still push a downloading track
       // out of the window.
-      this._cancelPreloadsOutsideWindow(curIndex);
+      this._cancelPreloadsOutsideWindow(current);
     }
   }
 
   /**
-   * The index that plays after `index`: the next one, wrapping to 0 under
-   * repeat 'all', or -1 at the end. Repeat 'one' is ignored here — skipping
-   * still moves on, and preloading still looks ahead.
+   * The track that plays after `track`: the next one, wrapping to the first
+   * under repeat 'all', or null at the end. Repeat 'one' is ignored here —
+   * skipping still moves on, and preloading still looks ahead. The one answer
+   * to "what plays next", for the machine, preloading and scheduling.
    */
-  private _nextIndexOf(index: number): number {
-    const n = this._tracks.length;
-    if (index + 1 < n) return index + 1;
-    if (this._repeat === 'all' && n > 1) return 0;
-    return -1;
+  private _nextOf(track: Track): Track | null {
+    const i = this._tracks.indexOf(track);
+    if (i === -1) return null;
+    if (i + 1 < this._tracks.length) return this._tracks[i + 1];
+    if (this._repeat === 'all' && this._tracks.length > 1) return this._tracks[0];
+    return null;
   }
 
-  /** The index whose gapless start can be scheduled after `index`, or -1. */
-  private _scheduleTargetIndex(index: number): number {
+  /** The track whose gapless start can be scheduled after `track`, or null. */
+  private _scheduleTargetOf(track: Track): Track | null {
     // Repeat 'one' restarts the same Track, which can't be scheduled against
     // itself; the restart is handled by the machine instead.
-    if (this._repeat === 'one') return -1;
-    return this._nextIndexOf(index);
+    if (this._repeat === 'one') return null;
+    return this._nextOf(track);
   }
 
-  /** After a repeat change: drop a schedule that no longer applies, and look ahead again. */
+  /** After a change to what follows the current track: drop a stale schedule, look ahead again. */
   private _rescheduleIfNextChanged(): void {
-    const snap = this._actor.getSnapshot();
-    const target = this._tracks[this._scheduleTargetIndex(snap.context.currentTrackIndex)];
+    const cur = this._currentTrack;
+    const target = cur ? this._scheduleTargetOf(cur) : null;
     if (this._scheduledNext && this._scheduledNext !== target) this._cancelScheduledGapless();
-    if (snap.value === 'playing') {
-      this._preloadAhead(snap.context.currentTrackIndex);
-      this._tryScheduleGapless(snap.context.currentTrackIndex);
+    if (this.isPlaying) {
+      this._preloadAhead(cur);
+      this._tryScheduleGapless(cur);
     } else {
-      this._cancelPreloadsOutsideWindow(snap.context.currentTrackIndex);
+      this._cancelPreloadsOutsideWindow(cur);
     }
   }
 
@@ -775,7 +783,6 @@ export class Queue implements TrackQueueRef {
   private _createTrack(e: Entry): Track {
     return new Track({
       trackUrl: e.url,
-      index: -1,
       queue: this,
       key: e.key,
       skipHEAD: e.skipHEAD,
@@ -786,12 +793,11 @@ export class Queue implements TrackQueueRef {
   private _dropTrack(t: Track): void {
     if (this._scheduledNext === t) this._cancelScheduledGapless();
     t.destroy();
-    t.index = -1;
   }
 
   /** True if the track is still in this queue (callbacks from dropped tracks are ignored). */
   private _owns(track: Track): boolean {
-    return this._tracks[track.index] === track;
+    return this._tracks.includes(track);
   }
 
   /**
@@ -836,13 +842,21 @@ export class Queue implements TrackQueueRef {
     return i === -1 ? -1 : i + 1;
   }
 
-  /** Look up a track by index — safe for use inside machine actions. */
-  private _trackAt(index: number): Track | undefined {
-    return this._tracks[index];
+  private get _currentTrack(): Track | undefined {
+    return this._actor.getSnapshot().context.current ?? undefined;
   }
 
-  private get _currentTrack(): Track | undefined {
-    return this._tracks[this._actor.getSnapshot().context.currentTrackIndex];
+  /** The current track and the next preloadNumTracks in play order. */
+  private _preloadWindow(from: Track): Track[] {
+    const window = [from];
+    for (
+      let step = 1, t = this._nextOf(from);
+      step <= this._preloadNumTracks && t !== null && t !== from;
+      step++, t = this._nextOf(t)
+    ) {
+      window.push(t);
+    }
+    return window;
   }
 
   /**
@@ -850,23 +864,15 @@ export class Queue implements TrackQueueRef {
    * current track plus the next preloadNumTracks in play order), so they don't
    * compete with the tracks that are about to play. Decoded buffers are kept.
    */
-  private _cancelPreloadsOutsideWindow(fromIndex: number): void {
-    const window = new Set<number>([fromIndex]);
-    for (
-      let step = 1, i = this._nextIndexOf(fromIndex);
-      step <= this._preloadNumTracks && i !== -1 && i !== fromIndex;
-      step++, i = this._nextIndexOf(i)
-    ) {
-      window.add(i);
-    }
-    for (let i = 0; i < this._tracks.length; i++) {
-      if (!window.has(i)) this._tracks[i].cancelPreload();
-    }
+  private _cancelPreloadsOutsideWindow(from: Track | null | undefined): void {
+    const window = new Set(from ? this._preloadWindow(from) : []);
+    for (const t of this._tracks) if (!window.has(t)) t.cancelPreload();
   }
 
-  private _preloadAhead(fromIndex: number): void {
-    this._cancelPreloadsOutsideWindow(fromIndex);
-    const cur = this._trackAt(fromIndex);
+  private _preloadAhead(from: Track | null | undefined): void {
+    this._cancelPreloadsOutsideWindow(from);
+    if (!from) return;
+    const cur = from;
 
     // Bandwidth-contention gate: while the current track is playing via HTML5
     // and its own Web Audio buffer is still being fetched+decoded, holding
@@ -883,15 +889,8 @@ export class Queue implements TrackQueueRef {
     // gate's data source — the current track's machine state — isn't
     // owned by the queue machine. Pushing the check into every caller
     // would just duplicate the same read.
-    if (
-      cur != null &&
-      cur.isPlaying &&
-      cur.playbackType === 'HTML5' &&
-      cur.webAudioLoadingState === 'LOADING'
-    ) {
-      this.onDebug(
-        `_preloadAhead(${fromIndex}): deferring all — current track buffer still loading`
-      );
+    if (cur.isPlaying && cur.playbackType === 'HTML5' && cur.webAudioLoadingState === 'LOADING') {
+      this.onDebug(`_preloadAhead(${cur.key}): deferring all — current track buffer still loading`);
       return;
     }
 
@@ -901,33 +900,29 @@ export class Queue implements TrackQueueRef {
     // — the point at which we have evidence the user is committing to
     // listening, not skipping.
     const curBelowThreshold =
-      cur != null &&
       cur.isPlaying &&
       cur.currentTime < (isNaN(cur.duration) ? 15 : Math.min(cur.duration * 0.2, 15));
 
     this.onDebug(
-      `_preloadAhead(${fromIndex}) ahead=${this._preloadNumTracks} trackCount=${this._tracks.length} belowThreshold=${curBelowThreshold}`
+      `_preloadAhead(${cur.key}) ahead=${this._preloadNumTracks} trackCount=${this._tracks.length} belowThreshold=${curBelowThreshold}`
     );
     // Walk forward in play order (wrapping under repeat 'all'), never past
-    // the current track.
-    for (
-      let step = 1, i = this._nextIndexOf(fromIndex);
-      step <= this._preloadNumTracks && i !== -1 && i !== fromIndex;
-      step++, i = this._nextIndexOf(i)
-    ) {
-      const t = this._tracks[i];
+    // the current track. One download at a time.
+    const ahead = this._preloadWindow(cur).slice(1);
+    for (let step = 1; step <= ahead.length; step++) {
+      const t = ahead[step - 1];
       if (step > 1 && curBelowThreshold) {
         this.onDebug(
-          `_preloadAhead: deferring track ${i} (current at ${cur.currentTime.toFixed(1)}s, below threshold)`
+          `_preloadAhead: deferring track ${t.key} (current at ${cur.currentTime.toFixed(1)}s, below threshold)`
         );
         return;
       }
       if (!t.isBufferLoaded) {
-        this.onDebug(`_preloadAhead: starting preload for track ${i}`);
+        this.onDebug(`_preloadAhead: starting preload for track ${t.key}`);
         t.preload();
         return;
       } else {
-        this.onDebug(`_preloadAhead: track ${i} already loaded`);
+        this.onDebug(`_preloadAhead: track ${t.key} already loaded`);
       }
     }
   }
@@ -936,24 +931,21 @@ export class Queue implements TrackQueueRef {
     const track = this._scheduledNext;
     if (track === null) return;
     track.cancelGaplessStart();
-    this.onDebug(`_cancelScheduledGapless: cancelled track ${track.index}`);
+    this.onDebug(`_cancelScheduledGapless: cancelled track ${track.key}`);
     // Cancel any HTML5 gain mute that was scheduled on the current track,
     // but only if it's still in HTML5 state. After crossover the gain node
     // is managed by the crossfade ramp — cancelScheduledValues would wipe it.
-    const cur = this._trackAt(this._actor.getSnapshot().context.currentTrackIndex);
+    const cur = this._currentTrack;
     if (cur && cur.playbackType === 'HTML5') cur.cancelHtml5Mute();
     this._scheduledNext = null;
   }
 
-  private _tryScheduleGapless(curIndex: number): void {
+  private _tryScheduleGapless(current: Track | null | undefined): void {
     const ctx = getAudioContext();
-    if (!ctx || this.playbackMethod === 'HTML5_ONLY') return;
+    if (!ctx || this.playbackMethod === 'HTML5_ONLY' || !current) return;
 
-    const nextIndex = this._scheduleTargetIndex(curIndex);
-    if (nextIndex === -1) return;
-
-    const current = this._tracks[curIndex];
-    const next = this._tracks[nextIndex];
+    const next = this._scheduleTargetOf(current);
+    if (!next) return;
 
     if (
       !current.isBufferLoaded ||
@@ -971,14 +963,14 @@ export class Queue implements TrackQueueRef {
     const timeUntilEnd = endTime - ctx.currentTime;
     if (current.playbackType === 'HTML5' && timeUntilEnd > MAX_SCHEDULE_LOOKAHEAD) {
       this.onDebug(
-        `_tryScheduleGapless: deferring — HTML5 track ${curIndex} has ${timeUntilEnd.toFixed(1)}s remaining (max lookahead=${MAX_SCHEDULE_LOOKAHEAD}s)`
+        `_tryScheduleGapless: deferring — HTML5 track ${current.key} has ${timeUntilEnd.toFixed(1)}s remaining (max lookahead=${MAX_SCHEDULE_LOOKAHEAD}s)`
       );
       return;
     }
 
     if (!next.scheduleGaplessStart(endTime)) {
       this.onDebug(
-        `_tryScheduleGapless: track ${nextIndex} rejected SCHEDULE_GAPLESS (state=${next.machineState})`
+        `_tryScheduleGapless: track ${next.key} rejected SCHEDULE_GAPLESS (state=${next.machineState})`
       );
       return;
     }
@@ -989,7 +981,7 @@ export class Queue implements TrackQueueRef {
       current.scheduleHtml5Mute(endTime);
     }
     this.onDebug(
-      `_tryScheduleGapless: scheduled track ${nextIndex} at endTime=${endTime.toFixed(3)} (in ${(endTime - ctx.currentTime).toFixed(1)}s) curPlaybackType=${current.playbackType}`
+      `_tryScheduleGapless: scheduled track ${next.key} at endTime=${endTime.toFixed(3)} (in ${(endTime - ctx.currentTime).toFixed(1)}s) curPlaybackType=${current.playbackType}`
     );
     this._scheduledNext = next;
   }

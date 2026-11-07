@@ -19,14 +19,17 @@ export interface TrackQueueRef {
   onTrackEnded(track: Track): void;
   onTrackBufferReady(track: Track): void;
   onPreloadReady(track: Track): void;
-  onProgress(info: TrackInfo): void;
+  onProgress(track: Track, info: TrackInfo): void;
   onError(error: Error): void;
   onPlayBlocked(): void;
   onDebug(msg: string): void;
   readonly volume: number;
   readonly playbackMethod: PlaybackMethod;
   readonly playbackRate: number;
-  readonly currentTrackIndex: number;
+  /** Key of the queue's current track (for debug messages). */
+  readonly currentKey: string | null;
+  /** This track's position in the queue's play order, or -1 if it isn't in it. */
+  indexOf(track: Track): number;
 }
 
 /** How close to the end (in seconds) before we attempt gapless scheduling. */
@@ -48,9 +51,7 @@ const CROSSOVER_FADE_SEC = 0.03;
 let _autoKey = 0;
 
 export class Track {
-  /** Position in the queue's play order. Reassigned by Queue when the order changes. */
-  index: number;
-  /** Stable identity across reorders. */
+  /** Stable identity across reorders. A track's position belongs to the queue. */
   readonly key: string;
   readonly metadata: TrackMetadata;
 
@@ -146,13 +147,11 @@ export class Track {
 
   constructor(opts: {
     trackUrl: string;
-    index: number;
     queue: TrackQueueRef;
     key?: string;
     skipHEAD?: boolean;
     metadata?: TrackMetadata;
   }) {
-    this.index = opts.index;
     // Queue always passes a key; this fallback is for a Track built on its own.
     this.key = opts.key ?? `track-${++_autoKey}`;
     this._trackUrl = opts.trackUrl;
@@ -183,12 +182,12 @@ export class Track {
       if (code === 1) return;
       const msg = this.audio.error?.message ?? 'unknown';
       this.queueRef.onError(
-        new Error(`HTML5 audio error on track ${this.index} (code ${code}): ${msg}`)
+        new Error(`HTML5 audio error on track ${this.key} (code ${code}): ${msg}`)
       );
     };
     this.audio.onended = () => {
       this.queueRef.onDebug(
-        `audio.onended track=${this.index} machineState=${this._actor.getSnapshot().value} queueIdx=${this.queueRef.currentTrackIndex}`
+        `audio.onended track=${this.key} machineState=${this._actor.getSnapshot().value} queueCurrent=${this.queueRef.currentKey}`
       );
       this._actor.send({ type: 'HTML5_ENDED' });
     };
@@ -285,7 +284,7 @@ export class Track {
           this._waRefCtxTime = when;
           this._waRefTrackTime = 0;
           this.queueRef.onDebug(
-            `startScheduledSourceNode track=${this.index} when=${when.toFixed(3)} ctxNow=${this.ctx.currentTime.toFixed(3)} delta=${(when - this.ctx.currentTime).toFixed(3)}s padding=${this._bufferStartPaddingSec.toFixed(3)}s`
+            `startScheduledSourceNode track=${this.key} when=${when.toFixed(3)} ctxNow=${this.ctx.currentTime.toFixed(3)} delta=${(when - this.ctx.currentTime).toFixed(3)}s padding=${this._bufferStartPaddingSec.toFixed(3)}s`
           );
         },
         startProgressLoop: () => this.startProgressLoop(),
@@ -300,7 +299,7 @@ export class Track {
         stopSourceNode: () => this._stopSourceNode(),
         stopProgressLoop: () => this._stopProgressLoop(),
         reportProgress: () => {
-          queueMicrotask(() => this.queueRef.onProgress(this.toInfo()));
+          queueMicrotask(() => this.queueRef.onProgress(this, this.toInfo()));
         },
         seekHtml5: ({ context }: { context: TrackContext }) => this._seekHtml5(context.seekTarget),
         seekWebAudio: ({ context }: { context: TrackContext }) =>
@@ -332,7 +331,7 @@ export class Track {
 
   play(): void {
     this.queueRef.onDebug(
-      `Track.play() track=${this.index} machineState=${this._actor.getSnapshot().value} hasBuffer=${!!this.audioBuffer} hasCtx=${!!this.ctx} audioPaused=${this.audio.paused}`
+      `Track.play() track=${this.key} machineState=${this._actor.getSnapshot().value} hasBuffer=${!!this.audioBuffer} hasCtx=${!!this.ctx} audioPaused=${this.audio.paused}`
     );
     this._actor.send({ type: 'PLAY' });
   }
@@ -389,7 +388,7 @@ export class Track {
 
   preload(): void {
     this.queueRef.onDebug(
-      `preload() track=${this.index} state=${this._actor.getSnapshot().value} hasBuffer=${!!this.audioBuffer} hasCtx=${!!this.ctx}`
+      `preload() track=${this.key} state=${this._actor.getSnapshot().value} hasBuffer=${!!this.audioBuffer} hasCtx=${!!this.ctx}`
     );
     if (this._actor.getSnapshot().value === 'idle') {
       this._actor.send({ type: 'PRELOAD' });
@@ -420,7 +419,7 @@ export class Track {
     const child = snap.children.fetchDecode as { getSnapshot(): { value: unknown } } | undefined;
     const stage = child?.getSnapshot().value;
     if (stage !== 'resolvingUrl' && stage !== 'fetching') return false;
-    this.queueRef.onDebug(`cancelPreload() track=${this.index} stage=${String(stage)}`);
+    this.queueRef.onDebug(`cancelPreload() track=${this.key} stage=${String(stage)}`);
     this._pendingArrayBuffer = null;
     this._actor.send({ type: 'CANCEL_PRELOAD' });
     return true;
@@ -432,12 +431,12 @@ export class Track {
 
   deactivate(): void {
     this.queueRef.onDebug(
-      `Track.deactivate() track=${this.index} machineState=${this._actor.getSnapshot().value} isPlaying=${this.isPlaying}`
+      `Track.deactivate() track=${this.key} machineState=${this._actor.getSnapshot().value} isPlaying=${this.isPlaying}`
     );
     this._notifiedPreloadThreshold = false;
     this._actor.send({ type: 'DEACTIVATE' });
     this.queueRef.onDebug(
-      `Track.deactivate() done track=${this.index} machineState=${this._actor.getSnapshot().value}`
+      `Track.deactivate() done track=${this.key} machineState=${this._actor.getSnapshot().value}`
     );
   }
 
@@ -569,7 +568,7 @@ export class Track {
 
   toInfo(): TrackInfo {
     return {
-      index: this.index,
+      index: this.queueRef.indexOf(this),
       key: this.key,
       currentTime: this.currentTime,
       duration: this.duration,
@@ -672,7 +671,7 @@ export class Track {
     if (!wasPlaying) {
       this.audio.pause();
       this.queueRef.onDebug(
-        `crossoverHtml5ToWebAudio track=${this.index} offset=${this._crossoverComputedOffset.toFixed(3)} wasPlaying=false`
+        `crossoverHtml5ToWebAudio track=${this.key} offset=${this._crossoverComputedOffset.toFixed(3)} wasPlaying=false`
       );
       return;
     }
@@ -712,7 +711,7 @@ export class Track {
     }
 
     this.queueRef.onDebug(
-      `crossoverHtml5ToWebAudio track=${this.index} offset=${this._crossoverComputedOffset.toFixed(3)} wasPlaying=true fade=${CROSSOVER_FADE_SEC}s mediaSource=${!!this._html5GainNode} when=${when?.toFixed(3) ?? 'null'}`
+      `crossoverHtml5ToWebAudio track=${this.key} offset=${this._crossoverComputedOffset.toFixed(3)} wasPlaying=true fade=${CROSSOVER_FADE_SEC}s mediaSource=${!!this._html5GainNode} when=${when?.toFixed(3) ?? 'null'}`
     );
   }
 
@@ -730,7 +729,7 @@ export class Track {
     this._bufferStartPaddingSec = 0;
     this._bufferAlignmentMeasured = true;
     this.queueRef.onDebug(
-      `_maybeComputeBufferAlignment track=${this.index} bufferDur=${this.audioBuffer.duration.toFixed(3)}s html5Dur=${isNaN(this.audio.duration) ? 'NaN' : this.audio.duration.toFixed(3) + 's'} (alignment shift disabled — see comment)`
+      `_maybeComputeBufferAlignment track=${this.key} bufferDur=${this.audioBuffer.duration.toFixed(3)}s html5Dur=${isNaN(this.audio.duration) ? 'NaN' : this.audio.duration.toFixed(3) + 's'} (alignment shift disabled — see comment)`
     );
   }
 
@@ -809,7 +808,7 @@ export class Track {
 
   private _handleWebAudioEnded = (): void => {
     this.queueRef.onDebug(
-      `_handleWebAudioEnded track=${this.index} sourceNode=${!!this.sourceNode} queueIdx=${this.queueRef.currentTrackIndex}`
+      `_handleWebAudioEnded track=${this.key} sourceNode=${!!this.sourceNode} queueCurrent=${this.queueRef.currentKey}`
     );
     if (!this.sourceNode) return;
     this._actor.send({ type: 'WEBAUDIO_ENDED' });
@@ -826,7 +825,7 @@ export class Track {
         this.rafId = null;
         return;
       }
-      this.queueRef.onProgress(this.toInfo());
+      this.queueRef.onProgress(this, this.toInfo());
 
       const remaining = this.duration - this.currentTime;
       const snap = this._actor.getSnapshot();

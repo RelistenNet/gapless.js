@@ -7,118 +7,120 @@
 //   paused   Explicitly paused by the user.
 //   ended    The last track in the queue has finished.
 //
+// The machine knows *which* entry is current (by reference), never *where* it
+// is. Order questions ("what plays after this?") go to the PlayList the queue
+// provides, which is also where repeat lives. Indices exist only at the public
+// API edge, derived from the queue's array.
+//
 // Root-level `on:` eliminates the handler duplication that plagued v2.
 //
 // Named actions (no-op defaults here, real implementations via .provide()):
 //   Actions before assign() see the OLD context (e.g. deactivateCurrent
-//   sees the old currentTrackIndex). Actions after assign() see the NEW
-//   context (e.g. activateCurrent sees the incremented index).
+//   sees the old current entry). Actions after assign() see the NEW context
+//   (e.g. activateCurrent sees the entry advanced to).
 //   Implementations MUST use the ({ context }) parameter, NOT getSnapshot().
 // ---------------------------------------------------------------------------
 
 import { setup, assign } from 'xstate';
-import type { RepeatMode } from '../types';
+
+// ---- Play order ------------------------------------------------------------
+
+/** The queue's play order, as the machine sees it. Implemented by Queue. */
+export interface PlayList<T> {
+  /** The entry that plays after `entry` (wrapping under repeat 'all'), or null at the end. */
+  next(entry: T): T | null;
+  /** The entry before `entry`, or null at the start. */
+  previous(entry: T): T | null;
+  first(): T | null;
+  size(): number;
+  /** True when the current entry restarts as it ends (repeat 'one', or 'all' over one entry). */
+  repeatsCurrent(): boolean;
+}
 
 // ---- Context ---------------------------------------------------------------
 
-export interface QueueContext {
-  currentTrackIndex: number;
-  trackCount: number;
-  /** Defaults to 'off'. */
-  repeat?: RepeatMode;
+export interface QueueContext<T> {
+  current: T | null;
+  list: PlayList<T>;
 }
 
 // ---- Events ----------------------------------------------------------------
 
-export type QueueEvent =
+export type QueueEvent<T> =
   | { type: 'PLAY' }
   | { type: 'PAUSE' }
   | { type: 'TOGGLE' }
   | { type: 'NEXT' }
   | { type: 'PREVIOUS' }
-  | { type: 'GOTO'; index: number; playImmediately?: boolean; startTime?: number }
+  | { type: 'GOTO'; track: T; playImmediately?: boolean; startTime?: number }
   | { type: 'SEEK'; time: number }
   | { type: 'SET_VOLUME'; volume: number }
-  | { type: 'ADD_TRACK' }
-  | { type: 'REMOVE_TRACK'; index: number }
+  // Sent after the entry has left the list. `successor` is what becomes
+  // current if `track` was current (null if the list is now empty).
+  | { type: 'REMOVE_TRACK'; track: T; successor: T | null }
   | { type: 'TRACK_ENDED' }
-  | { type: 'TRACK_LOADED'; index: number }
-  // Reorder: the queue rearranged its tracks without changing which one is
-  // current. Assign-only; side effects are run by Queue._applyOrder.
-  | { type: 'SYNC'; currentTrackIndex: number; trackCount: number }
-  | { type: 'SET_REPEAT'; repeat: RepeatMode };
+  | { type: 'TRACK_LOADED'; track: T }
+  // The list changed (entries added or reordered). The queue says which entry
+  // is current now; assign-only, the queue runs the side effects.
+  | { type: 'LIST_CHANGED'; current: T | null };
 
 // ---- Machine ---------------------------------------------------------------
 
-export function createQueueMachine(initialContext: QueueContext) {
+export function createQueueMachine<T>(initialContext: QueueContext<T>) {
+  type Ctx = QueueContext<T>;
+  type Ev = QueueEvent<T>;
+  const nextOf = (c: Ctx) => (c.current === null ? null : c.list.next(c.current));
   return setup({
     types: {
-      context: {} as QueueContext,
-      events: {} as QueueEvent,
+      context: {} as Ctx,
+      events: {} as Ev,
     },
     guards: {
-      hasNextTrack: ({ context }) =>
-        context.currentTrackIndex + 1 < context.trackCount ||
-        (context.repeat === 'all' && context.trackCount > 0),
-      // Repeat 'all' over a single track is the same as repeat 'one'.
-      repeatsCurrent: ({ context }) =>
-        context.trackCount > 0 &&
-        (context.repeat === 'one' || (context.repeat === 'all' && context.trackCount === 1)),
+      hasNextTrack: ({ context }) => nextOf(context) !== null,
+      repeatsCurrent: ({ context }) => context.current !== null && context.list.repeatsCurrent(),
       playImmediately: ({ event }) =>
         !!(event as { type: 'GOTO'; playImmediately?: boolean }).playImmediately,
-      willBeEmpty: ({ context }) => context.trackCount <= 1,
-      isRemovingCurrent: ({ context, event }) => {
-        const e = event as { type: 'REMOVE_TRACK'; index: number };
-        return e.index === context.currentTrackIndex;
+      // REMOVE_TRACK is sent after the entry has left the list.
+      willBeEmpty: ({ context }) => context.list.size() === 0,
+      isRemovingCurrent: ({ context, event }) =>
+        (event as { type: 'REMOVE_TRACK'; track: T }).track === context.current,
+      isCurrentTrackLoaded: ({ context, event }) =>
+        (event as { type: 'TRACK_LOADED'; track: T }).track === context.current,
+      listIsEmpty: ({ context }) => context.list.size() === 0,
+      // After LIST_CHANGED: something follows the (new) current entry.
+      listHasNextAfterChange: ({ context, event }) => {
+        const cur = (event as { type: 'LIST_CHANGED'; current: T | null }).current;
+        return cur !== null && context.list.next(cur) !== null;
       },
     },
     actions: {
       // --- named assign actions (avoids mixing inline assign with custom actions) ---
-      incrementTrackCount: assign({
-        trackCount: ({ context }) => context.trackCount + 1,
-      }),
-      decrementTrackCount: assign({
-        trackCount: ({ context }) => Math.max(0, context.trackCount - 1),
-        currentTrackIndex: ({ context, event }) => {
-          const e = event as { type: 'REMOVE_TRACK'; index: number };
-          const newCount = Math.max(0, context.trackCount - 1);
-          if (e.index < context.currentTrackIndex) {
-            return Math.max(0, context.currentTrackIndex - 1);
-          }
-          // Clamp to last valid index when removing at or after current
-          return newCount > 0 ? Math.min(context.currentTrackIndex, newCount - 1) : 0;
+      removeTrack: assign({
+        current: ({ context, event }) => {
+          const e = event as { type: 'REMOVE_TRACK'; track: T; successor: T | null };
+          return e.track === context.current ? e.successor : context.current;
         },
       }),
-      gotoTrackIndex: assign({
-        currentTrackIndex: ({ event }) => (event as { type: 'GOTO'; index: number }).index,
+      gotoTrack: assign({
+        current: ({ event }) => (event as { type: 'GOTO'; track: T }).track,
       }),
       advanceToNextTrack: assign({
-        currentTrackIndex: ({ context }) => {
-          const next = context.currentTrackIndex + 1;
-          if (next < context.trackCount) return next;
-          return context.repeat === 'all' ? 0 : context.currentTrackIndex;
-        },
+        current: ({ context }) => nextOf(context) ?? context.current,
       }),
       goToPreviousTrack: assign({
-        currentTrackIndex: ({ context }) => Math.max(0, context.currentTrackIndex - 1),
+        current: ({ context }) =>
+          context.current === null
+            ? null
+            : (context.list.previous(context.current) ?? context.current),
       }),
       advanceOnTrackEnd: assign({
-        currentTrackIndex: ({ context }) => {
-          const next = context.currentTrackIndex + 1;
-          if (next < context.trackCount) return next;
-          return context.repeat === 'all' ? 0 : context.trackCount - 1;
-        },
+        current: ({ context }) => nextOf(context) ?? context.current,
       }),
-      setRepeat: assign({
-        repeat: ({ event }) => (event as { type: 'SET_REPEAT'; repeat: RepeatMode }).repeat,
-      }),
-      syncOrder: assign({
-        currentTrackIndex: ({ event }) =>
-          (event as { type: 'SYNC'; currentTrackIndex: number }).currentTrackIndex,
-        trackCount: ({ event }) => (event as { type: 'SYNC'; trackCount: number }).trackCount,
+      listChanged: assign({
+        current: ({ event }) => (event as { type: 'LIST_CHANGED'; current: T | null }).current,
       }),
       resetToFirstTrack: assign({
-        currentTrackIndex: () => 0,
+        current: ({ context }) => context.list.first(),
       }),
       // --- side-effect actions (no-op defaults, provided by Queue.ts) ---
       deactivateCurrent: () => {},
@@ -147,22 +149,16 @@ export function createQueueMachine(initialContext: QueueContext) {
 
     // Global handlers — shared across all states
     on: {
-      ADD_TRACK: {
-        actions: 'incrementTrackCount',
-      },
       REMOVE_TRACK: {
-        actions: 'decrementTrackCount',
+        actions: 'removeTrack',
       },
-      SET_REPEAT: {
-        actions: 'setRepeat',
-      },
-      SYNC: [
+      LIST_CHANGED: [
         {
-          guard: ({ event }) => (event as { type: 'SYNC'; trackCount: number }).trackCount === 0,
+          guard: 'listIsEmpty',
           target: '.idle',
-          actions: 'syncOrder',
+          actions: 'listChanged',
         },
-        { actions: 'syncOrder' },
+        { actions: 'listChanged' },
       ],
     },
 
@@ -188,7 +184,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                'gotoTrackIndex',
+                'gotoTrack',
                 'activateCurrent',
                 'seekCurrentToStartTime',
                 'playCurrent',
@@ -202,7 +198,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                'gotoTrackIndex',
+                'gotoTrack',
                 'seekCurrentToStartTime',
                 'preloadAhead',
               ],
@@ -223,13 +219,13 @@ export function createQueueMachine(initialContext: QueueContext) {
             {
               guard: 'willBeEmpty',
               target: 'idle',
-              actions: ['cancelAllGapless', 'decrementTrackCount'],
+              actions: ['cancelAllGapless', 'removeTrack'],
             },
             {
               guard: 'isRemovingCurrent',
               actions: [
                 'cancelAllGapless',
-                'decrementTrackCount',
+                'removeTrack',
                 'activateCurrent',
                 'playCurrent',
                 'notifyStartNewTrack',
@@ -238,7 +234,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               ],
             },
             {
-              actions: ['decrementTrackCount', 'cancelAndRescheduleGapless', 'preloadAhead'],
+              actions: ['removeTrack', 'cancelAndRescheduleGapless', 'preloadAhead'],
             },
           ],
           PAUSE: {
@@ -281,7 +277,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                'gotoTrackIndex',
+                'gotoTrack',
                 'activateCurrent',
                 'seekCurrentToStartTime',
                 'playCurrent',
@@ -299,7 +295,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                'gotoTrackIndex',
+                'gotoTrack',
                 'seekCurrentToStartTime',
                 'preloadAhead',
               ],
@@ -349,7 +345,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               // crossover. Any existing gapless schedule was based on the old
               // HTML5-clock end-time prediction; cancel and re-schedule using
               // the now-authoritative WebAudio end time.
-              guard: ({ context, event }) => event.index === context.currentTrackIndex,
+              guard: 'isCurrentTrackLoaded',
               actions: ['cancelAndRescheduleGapless', 'preloadAhead'],
             },
             {
@@ -368,14 +364,14 @@ export function createQueueMachine(initialContext: QueueContext) {
             {
               guard: 'willBeEmpty',
               target: 'idle',
-              actions: ['cancelAllGapless', 'decrementTrackCount'],
+              actions: ['cancelAllGapless', 'removeTrack'],
             },
             {
               guard: 'isRemovingCurrent',
-              actions: ['cancelAllGapless', 'decrementTrackCount', 'preloadAhead'],
+              actions: ['cancelAllGapless', 'removeTrack', 'preloadAhead'],
             },
             {
-              actions: ['decrementTrackCount', 'preloadAhead'],
+              actions: ['removeTrack', 'preloadAhead'],
             },
           ],
           PLAY: {
@@ -429,7 +425,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                'gotoTrackIndex',
+                'gotoTrack',
                 'activateCurrent',
                 'seekCurrentToStartTime',
                 'playCurrent',
@@ -442,7 +438,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                'gotoTrackIndex',
+                'gotoTrack',
                 'seekCurrentToStartTime',
                 'preloadAhead',
               ],
@@ -486,22 +482,20 @@ export function createQueueMachine(initialContext: QueueContext) {
       // -----------------------------------------------------------------
       ended: {
         on: {
-          ADD_TRACK: {
-            target: 'paused',
-            actions: 'incrementTrackCount',
-          },
-          // Same rule as ADD_TRACK: once there's something after the current
-          // track again, the queue is no longer at its end.
-          SYNC: [
+          // Once something follows the current entry again (an append, an
+          // insert, a reorder), the queue is no longer at its end.
+          LIST_CHANGED: [
             {
-              guard: ({ event }) => {
-                const e = event as { type: 'SYNC'; currentTrackIndex: number; trackCount: number };
-                return e.currentTrackIndex + 1 < e.trackCount;
-              },
-              target: 'paused',
-              actions: 'syncOrder',
+              guard: 'listIsEmpty',
+              target: 'idle',
+              actions: 'listChanged',
             },
-            { actions: 'syncOrder' },
+            {
+              guard: 'listHasNextAfterChange',
+              target: 'paused',
+              actions: 'listChanged',
+            },
+            { actions: 'listChanged' },
           ],
           PLAY: {
             target: 'playing',
@@ -520,7 +514,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                'gotoTrackIndex',
+                'gotoTrack',
                 'activateCurrent',
                 'seekCurrentToStartTime',
                 'playCurrent',
@@ -534,7 +528,7 @@ export function createQueueMachine(initialContext: QueueContext) {
               actions: [
                 'deactivateCurrent',
                 'cancelAllGapless',
-                'gotoTrackIndex',
+                'gotoTrack',
                 'seekCurrentToStartTime',
                 'preloadAhead',
               ],
