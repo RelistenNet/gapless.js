@@ -126,6 +126,9 @@ player.remove('n1'); // removing the playing entry advances to the next one
 player.goto('t2', { play: true, startTime: 30 });
 ```
 
+Keys must be unique within the queue: `setEntries`, `insert` and `addTrack`
+throw on a duplicate key, before changing anything.
+
 `setEntries` reconciles by key. If the playing entry's key is still in the new
 list, it keeps playing and `startKey` is ignored; otherwise playback moves to
 `startKey`, or to the first entry.

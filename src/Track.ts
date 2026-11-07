@@ -153,7 +153,8 @@ export class Track {
     metadata?: TrackMetadata;
   }) {
     this.index = opts.index;
-    this.key = opts.key ?? `gapless-${++_autoKey}`;
+    // Queue always passes a key; this fallback is for a Track built on its own.
+    this.key = opts.key ?? `track-${++_autoKey}`;
     this._trackUrl = opts.trackUrl;
     this._resolvedUrl = opts.trackUrl;
     this.skipHEAD = opts.skipHEAD ?? false;

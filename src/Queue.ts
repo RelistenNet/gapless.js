@@ -86,6 +86,8 @@ export class Queue implements TrackQueueRef {
   private readonly _changeListeners = new Set<(change: QueueChange) => void>();
   /** Bumped on every structural edit; with currentKey and repeat, decides when onChange fires. */
   private _orderVersion = 0;
+  /** Counter for generated keys; see _newKey. */
+  private _keySeq = 0;
   private _changePending = false;
   private _lastChange: { version: number; currentKey: string | null; repeat: RepeatMode } | null =
     null;
@@ -154,6 +156,7 @@ export class Queue implements TrackQueueRef {
           trackUrl: url,
           index: i,
           queue: this,
+          key: `gapless-${++this._keySeq}`,
           metadata: trackMetadata[i],
         })
     );
@@ -350,6 +353,7 @@ export class Queue implements TrackQueueRef {
   }
 
   addTrack(url: string, options: AddTrackOptions = {}): void {
+    if (options.key !== undefined) this._assertUniqueKeys([options.key], true);
     const index = this._tracks.length;
     const metadata = options.metadata ?? ({} as TrackMetadata);
     this._tracks.push(
@@ -357,13 +361,16 @@ export class Queue implements TrackQueueRef {
         trackUrl: url,
         index,
         queue: this,
-        key: options.key,
+        key: options.key ?? this._newKey(),
         skipHEAD: options.skipHEAD,
         metadata,
       })
     );
     this._orderVersion++;
     this._actor.send({ type: 'ADD_TRACK' });
+    // Appending can change what plays next: on the last track it becomes the
+    // new entry, and under repeat 'all' that replaces a scheduled wrap to 0.
+    this._rescheduleIfNextChanged();
   }
 
   removeTrack(index: number): void {
@@ -391,6 +398,10 @@ export class Queue implements TrackQueueRef {
     entries: readonly Entry[],
     opts: { startKey?: string; startTime?: number; play?: boolean } = {}
   ): void {
+    this._assertUniqueKeys(
+      entries.map((e) => e.key),
+      false
+    );
     const byKey = new Map(this._tracks.map((t) => [t.key, t]));
     const next = entries.map((e) => byKey.get(e.key) ?? this._createTrack(e));
     const kept = new Set(next);
@@ -423,6 +434,10 @@ export class Queue implements TrackQueueRef {
 
   /** Insert entries after a key, after the current entry, or at either end. */
   insert(entries: readonly Entry[], position: Position = { after: 'end' }): void {
+    this._assertUniqueKeys(
+      entries.map((e) => e.key),
+      true
+    );
     const at = this._insertionIndex(position);
     if (at === -1) return;
     const next = [...this._tracks];
@@ -495,13 +510,15 @@ export class Queue implements TrackQueueRef {
     this.setRepeat(snapshot.repeat);
     const play = opts.play ?? false;
     const current = this._currentTrack;
+    const keptCurrent = !!current && snapshot.entries.some((e) => e.key === current.key);
     this.setEntries(snapshot.entries, {
       startKey: snapshot.currentKey ?? undefined,
       startTime: snapshot.currentTime || undefined,
       play,
     });
-    // setEntries keeps a surviving current track where it is; restore moves it.
-    if (snapshot.currentKey && current && current.key === snapshot.currentKey) {
+    // setEntries keeps a surviving current track where it is, ignoring
+    // startKey and startTime; restore always moves to the saved position.
+    if (keptCurrent && snapshot.currentKey) {
       this.goto(snapshot.currentKey, { play, startTime: snapshot.currentTime });
     }
   }
@@ -767,6 +784,31 @@ export class Queue implements TrackQueueRef {
   /** True if the track is still in this queue (callbacks from dropped tracks are ignored). */
   private _owns(track: Track): boolean {
     return this._tracks[track.index] === track;
+  }
+
+  /**
+   * A key that isn't in the queue. Keys restored from a snapshot may look like
+   * generated ones (the counter starts over on reload), so skip any in use.
+   */
+  private _newKey(): string {
+    const used = new Set(this._tracks.map((t) => t.key));
+    let key: string;
+    do key = `gapless-${++this._keySeq}`;
+    while (used.has(key));
+    return key;
+  }
+
+  /**
+   * Throws on a key repeated in `keys`, or (with `againstQueue`) already in
+   * the queue. Checked before any change, so a rejected edit leaves the queue
+   * as it was.
+   */
+  private _assertUniqueKeys(keys: readonly string[], againstQueue: boolean): void {
+    const seen = new Set(againstQueue ? this._tracks.map((t) => t.key) : []);
+    for (const key of keys) {
+      if (seen.has(key)) throw new Error(`gapless: duplicate key "${key}"`);
+      seen.add(key);
+    }
   }
 
   private _indexOfKey(key: string): number {

@@ -263,3 +263,56 @@ describe('onChange', () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+describe('review fixes', () => {
+  it("addTrack while the last entry plays under repeat 'all' moves the schedule off the wrap", async () => {
+    const { q, internal } = queueOf(['a', 'b'], { repeat: 'all' });
+    q.goto('b', { play: true });
+    advanceTime(20);
+    await flush();
+    const a = internal._tracks[0];
+    expect(internal._scheduledNext).toBe(a);
+    const cancel = vi.spyOn(a, 'cancelGaplessStart');
+
+    q.addTrack('c.mp3', { key: 'c' });
+    expect(cancel).toHaveBeenCalled();
+    expect(internal._scheduledNext).not.toBe(a);
+    await flush();
+    expect(internal._scheduledNext?.key).toBe('c');
+  });
+
+  it('restore moves to the saved entry when a different current entry survives', () => {
+    const { q } = queueOf(['a', 'b']);
+    q.goto('a', { startTime: 5 });
+    q.restore({ entries: ['a', 'b'].map(entry), currentKey: 'b', currentTime: 30, repeat: 'off' });
+    expect(q.currentKey).toBe('b');
+    expect(q.currentTrack?.currentTime).toBe(30);
+  });
+
+  it('generated keys never collide with keys already in the queue', () => {
+    // After a reload the generator starts over, so a restored snapshot can hold
+    // exactly the keys it is about to generate. Simulate that by restoring the
+    // next few generated keys before generating any.
+    const probe = new Queue();
+    probe.addTrack('probe.mp3');
+    const n = Number(probe.keys[0].replace(/\D+/g, ''));
+    const upcoming = [1, 2, 3].map((i) => probe.keys[0].replace(String(n), String(n + i)));
+
+    const q = new Queue();
+    q.setEntries(upcoming.map((key) => ({ key, url: `${key}.mp3` })));
+    for (let i = 0; i < 5; i++) q.addTrack(`x${i}.mp3`);
+    const keys = q.keys;
+    expect(keys.slice(0, 3)).toEqual(upcoming);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('rejects duplicate keys instead of corrupting the queue', () => {
+    const q = new Queue();
+    q.setEntries(['a', 'b'].map(entry));
+    expect(() => q.insert([entry('a')])).toThrow(/duplicate key "a"/);
+    expect(() => q.insert([entry('n'), entry('n')])).toThrow(/duplicate key "n"/);
+    expect(() => q.setEntries(['x', 'x'].map(entry))).toThrow(/duplicate key "x"/);
+    expect(() => q.addTrack('a2.mp3', { key: 'b' })).toThrow(/duplicate key "b"/);
+    expect(q.keys).toEqual(['a', 'b']);
+  });
+});
