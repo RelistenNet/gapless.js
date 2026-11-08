@@ -604,7 +604,7 @@ export class Queue implements TrackQueueRef {
     if (this.isPlaying) {
       this._preloadAhead(this._currentTrack);
     } else {
-      this._cancelPreloadsOutsideWindow(this._currentTrack);
+      this._unloadOutsideWindow(this._currentTrack);
     }
   }
 
@@ -709,9 +709,9 @@ export class Queue implements TrackQueueRef {
       this._preloadAhead(current);
       this._tryScheduleGapless(current);
     } else {
-      // "Next" is unchanged, but a move can still push a downloading track
-      // out of the window.
-      this._cancelPreloadsOutsideWindow(current);
+      // "Next" is unchanged, but a move can still push a loading or loaded
+      // track out of the window.
+      this._unloadOutsideWindow(current);
     }
   }
 
@@ -746,7 +746,7 @@ export class Queue implements TrackQueueRef {
       this._preloadAhead(cur);
       this._tryScheduleGapless(cur);
     } else {
-      this._cancelPreloadsOutsideWindow(cur);
+      this._unloadOutsideWindow(cur);
     }
   }
 
@@ -860,17 +860,18 @@ export class Queue implements TrackQueueRef {
   }
 
   /**
-   * Abort downloads for tracks that are no longer in the preload window (the
-   * current track plus the next preloadNumTracks in play order), so they don't
-   * compete with the tracks that are about to play. Decoded buffers are kept.
+   * Unload tracks that are no longer in the preload window (the current track
+   * plus the next preloadNumTracks in play order): abort their downloads, so
+   * they don't compete with the tracks about to play, and release their
+   * decoded audio, which is large. They load again if they come back.
    */
-  private _cancelPreloadsOutsideWindow(from: Track | null | undefined): void {
+  private _unloadOutsideWindow(from: Track | null | undefined): void {
     const window = new Set(from ? this._preloadWindow(from) : []);
-    for (const t of this._tracks) if (!window.has(t)) t.cancelPreload();
+    for (const t of this._tracks) if (!window.has(t)) t.unload();
   }
 
   private _preloadAhead(from: Track | null | undefined): void {
-    this._cancelPreloadsOutsideWindow(from);
+    this._unloadOutsideWindow(from);
     if (!from) return;
     const cur = from;
 

@@ -69,8 +69,8 @@ export type TrackEvent =
   | { type: 'WEBAUDIO_ENDED' }
   | { type: 'URL_RESOLVED'; url: string }
   | { type: 'START_FETCH' }
-  // Abort an in-flight fetch (sent by Track only before decoding starts).
-  | { type: 'CANCEL_PRELOAD' }
+  // Let go of Web Audio data: abort a fetch, drop a decode, release a buffer.
+  | { type: 'UNLOAD' }
   | { type: 'SCHEDULE_GAPLESS'; when: number }
   | { type: 'CANCEL_GAPLESS' }
   | { type: 'LOOKAHEAD_REACHED' };
@@ -87,8 +87,10 @@ export function createTrackMachine(initialContext: TrackContext) {
       fetchDecode: fetchDecodeMachine,
     },
     guards: {
-      canCancelPreload: ({ context }) =>
-        context.webAudioLoadingState === 'LOADING' && !context.isPlaying,
+      canUnload: ({ context }) =>
+        (context.webAudioLoadingState === 'LOADING' || context.webAudioLoadingState === 'LOADED') &&
+        !context.isPlaying &&
+        !context.pendingPlay,
       canPlayWebAudio: () => false,
       isWebAudioOnly: () => false,
       canStartFetch: ({ context }) =>
@@ -189,10 +191,11 @@ export function createTrackMachine(initialContext: TrackContext) {
           }),
         ],
       },
-      // Stopping the child aborts its fetch. Never for a playing track: its
-      // decode is what lets it cross over to Web Audio.
-      CANCEL_PRELOAD: {
-        guard: 'canCancelPreload',
+      // Stopping the child aborts its fetch (Track drops a decode in flight and
+      // the buffer itself). Never for a playing, scheduled or waiting track:
+      // its decode is what lets it cross over to Web Audio.
+      UNLOAD: {
+        guard: 'canUnload',
         actions: ['stopFetch', 'resetLoadingState'],
       },
     },
@@ -367,8 +370,8 @@ export function createTrackMachine(initialContext: TrackContext) {
       // -----------------------------------------------------------------
       loading: {
         on: {
-          CANCEL_PRELOAD: {
-            guard: 'canCancelPreload',
+          UNLOAD: {
+            guard: 'canUnload',
             target: 'idle',
             actions: ['stopFetch', 'resetLoadingState'],
           },

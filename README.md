@@ -143,9 +143,11 @@ safe at any point:
 - the current entry keeps playing, untouched;
 - if the entry after it changed, the old one's scheduled gapless start is
   cancelled, and the new one is preloaded and scheduled;
-- downloads for entries that left the preload window (the current entry plus
-  the next `preloadNumTracks`) are aborted, so they don't compete with the
-  entries about to play; decoded audio is kept.
+- entries that left the preload window (the current entry plus the next
+  `preloadNumTracks`) are unloaded: downloads are aborted, so they don't
+  compete with the entries about to play, and decoded audio is released,
+  since a decoded track takes hundreds of MB. An entry that comes back into
+  the window loads again.
 
 #### Repeat
 
