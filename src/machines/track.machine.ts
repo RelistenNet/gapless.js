@@ -59,6 +59,9 @@ export type TrackEvent =
   | { type: 'PRELOAD' }
   | { type: 'BUFFER_LOADING' }
   | { type: 'PLAY' }
+  // The browser refused HTML5 play() (autoplay policy): nothing will play, so
+  // nothing should keep downloading.
+  | { type: 'PLAY_BLOCKED' }
   | { type: 'PLAY_WEBAUDIO' }
   | { type: 'PAUSE' }
   | { type: 'SEEK'; time: number }
@@ -112,6 +115,8 @@ export function createTrackMachine(initialContext: TrackContext) {
       seekHtml5: () => {},
       seekWebAudio: () => {},
       resetHtml5Element: () => {},
+      releaseHtml5Element: () => {},
+      dropPendingDecode: () => {},
       resetTiming: () => {},
       notifyTrackEnded: () => {},
       triggerFetchForPendingPlay: () => {},
@@ -306,6 +311,35 @@ export function createTrackMachine(initialContext: TrackContext) {
           PLAY: {
             actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop'],
           },
+          // Blocked before a sound was made: back to idle, as if play() had
+          // never been called. The element stops buffering, and a Web Audio
+          // download still in flight is aborted (a decoded buffer is kept: it
+          // costs nothing more). The position is kept for the next play().
+          PLAY_BLOCKED: [
+            {
+              guard: ({ context }: { context: TrackContext }) =>
+                context.webAudioLoadingState === 'LOADING',
+              target: 'idle',
+              actions: [
+                'clearIsPlaying',
+                'stopProgressLoop',
+                'releaseHtml5Element',
+                'stopFetch',
+                'resetLoadingState',
+                'dropPendingDecode',
+                'reportProgress',
+              ],
+            },
+            {
+              target: 'idle',
+              actions: [
+                'clearIsPlaying',
+                'stopProgressLoop',
+                'releaseHtml5Element',
+                'reportProgress',
+              ],
+            },
+          ],
           BUFFER_LOADING: {
             actions: 'setLoadingState',
           },

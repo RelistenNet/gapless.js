@@ -317,6 +317,8 @@ export class Track {
           this._seekAbort = new AbortController();
           this.audio.currentTime = 0;
         },
+        releaseHtml5Element: () => this._releaseHtml5Element(),
+        dropPendingDecode: () => this._dropPendingDecode(),
         resetTiming: () => {
           this._waRefCtxTime = 0;
           this._waRefTrackTime = 0;
@@ -429,8 +431,7 @@ export class Track {
     if (state !== 'LOADING' && state !== 'LOADED') return false;
     if (context.isPlaying || context.pendingPlay) return false;
     this.queueRef.onDebug(`unload() track=${this.key} state=${state}`);
-    this._loadGeneration++;
-    this._pendingArrayBuffer = null;
+    this._dropPendingDecode();
     this.audioBuffer = null;
     this._actor.send({ type: 'UNLOAD' });
     return true;
@@ -620,6 +621,8 @@ export class Track {
     if (promise) {
       promise.catch((err: unknown) => {
         if (err instanceof Error && err.name === 'NotAllowedError') {
+          // First, so the queue (and the app's callback) see a stopped track.
+          this._actor.send({ type: 'PLAY_BLOCKED' });
           this.queueRef.onPlayBlocked();
         } else if (err instanceof Error && err.name === 'AbortError') {
           // Browser aborted — element will recover on next play()
@@ -628,6 +631,27 @@ export class Track {
         }
       });
     }
+  }
+
+  /** A fetch or decode that finishes from now on is dropped (see unload()). */
+  private _dropPendingDecode(): void {
+    this._loadGeneration++;
+    this._pendingArrayBuffer = null;
+  }
+
+  /**
+   * Stop the element's download without an error event: drop its source
+   * (which aborts the fetch) and put it back unloaded, so the next play()
+   * starts it fresh.
+   */
+  private _releaseHtml5Element(): void {
+    this.audio.pause();
+    this._seekAbort.abort();
+    this._seekAbort = new AbortController();
+    this.audio.preload = 'none';
+    this.audio.removeAttribute('src');
+    this.audio.load();
+    this.audio.src = this._trackUrl;
   }
 
   private _seekHtml5(target: number): void {
