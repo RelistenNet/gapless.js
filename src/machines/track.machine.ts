@@ -59,6 +59,9 @@ export type TrackEvent =
   | { type: 'PRELOAD' }
   | { type: 'BUFFER_LOADING' }
   | { type: 'PLAY' }
+  // The browser refused HTML5 play() (autoplay policy): nothing will play, so
+  // nothing should keep downloading.
+  | { type: 'PLAY_BLOCKED' }
   | { type: 'PLAY_WEBAUDIO' }
   | { type: 'PAUSE' }
   | { type: 'SEEK'; time: number }
@@ -69,8 +72,8 @@ export type TrackEvent =
   | { type: 'WEBAUDIO_ENDED' }
   | { type: 'URL_RESOLVED'; url: string }
   | { type: 'START_FETCH' }
-  // Abort an in-flight fetch (sent by Track only before decoding starts).
-  | { type: 'CANCEL_PRELOAD' }
+  // Let go of Web Audio data: abort a fetch, drop a decode, release a buffer.
+  | { type: 'UNLOAD' }
   | { type: 'SCHEDULE_GAPLESS'; when: number }
   | { type: 'CANCEL_GAPLESS' }
   | { type: 'LOOKAHEAD_REACHED' };
@@ -87,8 +90,10 @@ export function createTrackMachine(initialContext: TrackContext) {
       fetchDecode: fetchDecodeMachine,
     },
     guards: {
-      canCancelPreload: ({ context }) =>
-        context.webAudioLoadingState === 'LOADING' && !context.isPlaying,
+      canUnload: ({ context }) =>
+        (context.webAudioLoadingState === 'LOADING' || context.webAudioLoadingState === 'LOADED') &&
+        !context.isPlaying &&
+        !context.pendingPlay,
       canPlayWebAudio: () => false,
       isWebAudioOnly: () => false,
       canStartFetch: ({ context }) =>
@@ -110,6 +115,8 @@ export function createTrackMachine(initialContext: TrackContext) {
       seekHtml5: () => {},
       seekWebAudio: () => {},
       resetHtml5Element: () => {},
+      releaseHtml5Element: () => {},
+      dropPendingDecode: () => {},
       resetTiming: () => {},
       notifyTrackEnded: () => {},
       triggerFetchForPendingPlay: () => {},
@@ -157,6 +164,9 @@ export function createTrackMachine(initialContext: TrackContext) {
       setPlaybackTypeWebAudio: assign({
         playbackType: () => 'WEBAUDIO' as PlaybackType,
       }),
+      setPlaybackTypeHtml5: assign({
+        playbackType: () => 'HTML5' as PlaybackType,
+      }),
       clearNotifiedLookahead: assign({
         notifiedLookahead: () => false,
       }),
@@ -189,10 +199,11 @@ export function createTrackMachine(initialContext: TrackContext) {
           }),
         ],
       },
-      // Stopping the child aborts its fetch. Never for a playing track: its
-      // decode is what lets it cross over to Web Audio.
-      CANCEL_PRELOAD: {
-        guard: 'canCancelPreload',
+      // Stopping the child aborts its fetch (Track drops a decode in flight and
+      // the buffer itself). Never for a playing, scheduled or waiting track:
+      // its decode is what lets it cross over to Web Audio.
+      UNLOAD: {
+        guard: 'canUnload',
         actions: ['stopFetch', 'resetLoadingState'],
       },
     },
@@ -290,6 +301,9 @@ export function createTrackMachine(initialContext: TrackContext) {
       // html5: HTML5 Audio is playing; WebAudio decode may be in progress
       // -----------------------------------------------------------------
       html5: {
+        // HTML5 is the output here, whatever played before: a track that ran
+        // on Web Audio, was unloaded and plays again starts over on HTML5.
+        entry: 'setPlaybackTypeHtml5',
         on: {
           PAUSE: {
             actions: [
@@ -303,6 +317,35 @@ export function createTrackMachine(initialContext: TrackContext) {
           PLAY: {
             actions: ['setIsPlaying', 'playHtml5', 'startProgressLoop'],
           },
+          // Blocked before a sound was made: back to idle, as if play() had
+          // never been called. The element stops buffering, and a Web Audio
+          // download still in flight is aborted (a decoded buffer is kept: it
+          // costs nothing more). The position is kept for the next play().
+          PLAY_BLOCKED: [
+            {
+              guard: ({ context }: { context: TrackContext }) =>
+                context.webAudioLoadingState === 'LOADING',
+              target: 'idle',
+              actions: [
+                'clearIsPlaying',
+                'stopProgressLoop',
+                'releaseHtml5Element',
+                'stopFetch',
+                'resetLoadingState',
+                'dropPendingDecode',
+                'reportProgress',
+              ],
+            },
+            {
+              target: 'idle',
+              actions: [
+                'clearIsPlaying',
+                'stopProgressLoop',
+                'releaseHtml5Element',
+                'reportProgress',
+              ],
+            },
+          ],
           BUFFER_LOADING: {
             actions: 'setLoadingState',
           },
@@ -367,8 +410,8 @@ export function createTrackMachine(initialContext: TrackContext) {
       // -----------------------------------------------------------------
       loading: {
         on: {
-          CANCEL_PRELOAD: {
-            guard: 'canCancelPreload',
+          UNLOAD: {
+            guard: 'canUnload',
             target: 'idle',
             actions: ['stopFetch', 'resetLoadingState'],
           },

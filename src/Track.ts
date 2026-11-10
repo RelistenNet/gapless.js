@@ -60,6 +60,8 @@ export class Track {
   readonly skipHEAD: boolean;
   /** Temporary holder between fetch and decode steps (unserializable — stays on Track class). */
   private _pendingArrayBuffer: ArrayBuffer | null = null;
+  /** Bumped by unload(): a fetch or decode that finishes after it is dropped. */
+  private _loadGeneration = 0;
 
   // ---- HTML5 Audio ---------------------------------------------------------
   readonly audio: HTMLAudioElement;
@@ -236,15 +238,21 @@ export class Track {
             }),
             fetchAudio: fromPromise(async ({ input, signal }) => {
               const { resolvedUrl } = input as { resolvedUrl: string };
+              const generation = this._loadGeneration;
               const res = await fetch(resolvedUrl, { signal });
               if (!res.ok) throw new Error(`HTTP ${res.status} for ${resolvedUrl}`);
-              this._pendingArrayBuffer = await res.arrayBuffer();
+              const bytes = await res.arrayBuffer();
+              if (generation === this._loadGeneration) this._pendingArrayBuffer = bytes;
             }),
             decodeAudio: fromPromise(async () => {
               const buf = this._pendingArrayBuffer;
               this._pendingArrayBuffer = null;
               if (!buf || !this.ctx) throw new Error('No ArrayBuffer or AudioContext');
-              this.audioBuffer = await this.ctx.decodeAudioData(buf);
+              const generation = this._loadGeneration;
+              const decoded = await this.ctx.decodeAudioData(buf);
+              // Unloaded mid-decode (which can't be aborted): drop the result.
+              if (generation !== this._loadGeneration) return;
+              this.audioBuffer = decoded;
               this._maybeComputeBufferAlignment();
             }),
           },
@@ -309,6 +317,8 @@ export class Track {
           this._seekAbort = new AbortController();
           this.audio.currentTime = 0;
         },
+        releaseHtml5Element: () => this._releaseHtml5Element(),
+        dropPendingDecode: () => this._dropPendingDecode(),
         resetTiming: () => {
           this._waRefCtxTime = 0;
           this._waRefTrackTime = 0;
@@ -407,21 +417,26 @@ export class Track {
   }
 
   /**
-   * Abort an in-flight Web Audio download, so the track can be preloaded again
-   * later from scratch. Only while the URL is being resolved or the file
-   * fetched: once decoding starts the bytes are already here, and the decode
-   * (which assigns audioBuffer itself) can't be aborted. Returns whether a
-   * download was cancelled.
+   * Let go of this track's Web Audio data, so a track out of the preload
+   * window doesn't hold memory (a decoded hour of audio is hundreds of MB):
+   * abort its download, drop a decode in progress when it finishes (decoding
+   * can't be aborted), or release its decoded buffer. It loads again from
+   * scratch if it comes back into the window. Never while it's playing,
+   * scheduled to play, or waiting for its buffer to play. Returns whether
+   * anything was let go.
    */
-  cancelPreload(): boolean {
-    const snap = this._actor.getSnapshot();
-    if (snap.context.webAudioLoadingState !== 'LOADING' || snap.context.isPlaying) return false;
-    const child = snap.children.fetchDecode as { getSnapshot(): { value: unknown } } | undefined;
-    const stage = child?.getSnapshot().value;
-    if (stage !== 'resolvingUrl' && stage !== 'fetching') return false;
-    this.queueRef.onDebug(`cancelPreload() track=${this.key} stage=${String(stage)}`);
-    this._pendingArrayBuffer = null;
-    this._actor.send({ type: 'CANCEL_PRELOAD' });
+  unload(): boolean {
+    const { context } = this._actor.getSnapshot();
+    const state = context.webAudioLoadingState;
+    if (state !== 'LOADING' && state !== 'LOADED') return false;
+    if (context.isPlaying || context.pendingPlay) return false;
+    this.queueRef.onDebug(`unload() track=${this.key} state=${state}`);
+    this._dropPendingDecode();
+    this.audioBuffer = null;
+    // A track that ended on Web Audio keeps its finished source node, whose
+    // buffer is the decoded audio: let it go too, or the memory stays held.
+    this._stopSourceNode();
+    this._actor.send({ type: 'UNLOAD' });
     return true;
   }
 
@@ -609,6 +624,8 @@ export class Track {
     if (promise) {
       promise.catch((err: unknown) => {
         if (err instanceof Error && err.name === 'NotAllowedError') {
+          // First, so the queue (and the app's callback) see a stopped track.
+          this._actor.send({ type: 'PLAY_BLOCKED' });
           this.queueRef.onPlayBlocked();
         } else if (err instanceof Error && err.name === 'AbortError') {
           // Browser aborted — element will recover on next play()
@@ -617,6 +634,27 @@ export class Track {
         }
       });
     }
+  }
+
+  /** A fetch or decode that finishes from now on is dropped (see unload()). */
+  private _dropPendingDecode(): void {
+    this._loadGeneration++;
+    this._pendingArrayBuffer = null;
+  }
+
+  /**
+   * Stop the element's download without an error event: drop its source
+   * (which aborts the fetch) and put it back unloaded, so the next play()
+   * starts it fresh.
+   */
+  private _releaseHtml5Element(): void {
+    this.audio.pause();
+    this._seekAbort.abort();
+    this._seekAbort = new AbortController();
+    this.audio.preload = 'none';
+    this.audio.removeAttribute('src');
+    this.audio.load();
+    this.audio.src = this._trackUrl;
   }
 
   private _seekHtml5(target: number): void {

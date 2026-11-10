@@ -930,9 +930,10 @@ describe('Queue next/previous/gotoTrack cancel stale gapless schedule', () => {
 
     q.gotoTrack(2, true);
 
-    // Track 1 should be back to idle (cancelled), buffer still loaded
+    // Track 1 should be back to idle (cancelled). It's behind the current
+    // track now, outside the preload window, so its buffer is released too.
     expect(q.tracks[1].machineState).toBe('idle');
-    expect(q.tracks[1].webAudioLoadingState).toBe('LOADED');
+    expect(q.tracks[1].webAudioLoadingState).toBe('NONE');
   });
 
   it('gotoTrack(_, false) cancels gapless without playing', async () => {
@@ -1374,15 +1375,11 @@ describe('Queue preloading without prior AudioContext', () => {
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
 
-    // Track 1 should already be preloaded by gotoTrack()'s preload-ahead logic
+    // The window (the next 2) is preloaded by gotoTrack()'s preload-ahead logic…
     expect(tracks[1].isBufferLoaded).toBe(true);
-
-    // Manually preload track 3 — should also work since ctx now exists
-    (tracks[3] as unknown as { preload(): void }).preload();
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(tracks[3].isBufferLoaded).toBe(true);
+    expect(tracks[2].isBufferLoaded).toBe(true);
+    // …and nothing outside it.
+    expect(tracks[3].isBufferLoaded).toBe(false);
   });
 });
 

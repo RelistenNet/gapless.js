@@ -171,6 +171,10 @@ export class MockAudioElement {
 
   load: Mock = vi.fn();
 
+  removeAttribute = vi.fn((name: string) => {
+    if (name === 'src') this.src = '';
+  });
+
   addEventListener = vi.fn(
     (type: string, cb: EventListenerOrEventListenerObject, opts?: AddEventListenerOptions) => {
       if (!this._listeners[type]) this._listeners[type] = [];

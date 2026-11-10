@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
-// In-flight downloads for tracks that leave the preload window are aborted,
-// so they don't compete with the new next track for bandwidth.
+// Tracks that leave the preload window are unloaded: in-flight downloads are
+// aborted, so they don't compete with the new next track for bandwidth, and
+// decoded buffers are released, so they don't hold memory.
 // ---------------------------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
@@ -104,14 +105,57 @@ describe('cancelling displaced preloads', () => {
     expect(internal._tracks[1].webAudioLoadingState).toBe('LOADING');
   });
 
-  it('keeps decoded buffers for displaced tracks', async () => {
+  it('releases the decoded buffer of a track moved out of the window', async () => {
     const { q, internal } = await playingWithNextDownloading(['a', 'b', 'c'], []);
     const b = internal._tracks[1];
     expect(b.isBufferLoaded).toBe(true);
     q.move('b', { after: 'c' });
     await flush();
+    expect(b.isBufferLoaded).toBe(false);
+    expect(b.webAudioLoadingState).toBe('NONE');
+    expect(internal._tracks[1].key).toBe('c'); // c, now next, loads instead
+    expect(internal._tracks[1].webAudioLoadingState).toBe('LOADED');
+
+    q.move('b', { after: 'a' }); // back in the window: loads again
+    await flush();
     expect(b.isBufferLoaded).toBe(true);
     expect(b.webAudioLoadingState).toBe('LOADED');
+  });
+
+  it('drops a decode in progress when its track leaves the window', async () => {
+    const { q, internal } = await playingWithNextDownloading(['a', 'b', 'c'], ['c']);
+    // Hold b's decode open: decoding can't be aborted.
+    const ctx = (globalThis as Internal)._mockAudioContext;
+    let finish: (buf: AudioBuffer) => void = () => {};
+    ctx.decodeAudioData.mockImplementationOnce(
+      () => new Promise<AudioBuffer>((resolve) => (finish = resolve))
+    );
+    q.move('b', { after: 'c' });
+    q.move('b', { after: 'a' }); // b unloads (it was LOADED), then starts again…
+    await flush();
+    const b = internal._tracks[1];
+    expect(b.key).toBe('b');
+    expect(b.webAudioLoadingState).toBe('LOADING'); // …and is decoding
+
+    q.move('b', { after: 'c' }); // out of the window mid-decode
+    await flush();
+    expect(b.webAudioLoadingState).toBe('NONE');
+    finish({ duration: 180 } as AudioBuffer); // the decode lands late
+    await flush();
+    expect(b.isBufferLoaded).toBe(false);
+    expect(b.webAudioLoadingState).toBe('NONE');
+  });
+
+  it('releases the track that just played once the queue moves on', async () => {
+    const { q, internal } = await playingWithNextDownloading(['a', 'b', 'c'], []);
+    const a = internal._tracks[0];
+    expect(a.isBufferLoaded).toBe(true);
+    q.pause();
+    internal.onTrackEnded(a); // a → b
+    await flush();
+    expect(q.currentKey).toBe('b');
+    expect(a.isBufferLoaded).toBe(false);
+    expect(internal._tracks[1].isBufferLoaded).toBe(true); // b, current, keeps its buffer
   });
 
   it('never cancels the current track', async () => {
@@ -141,5 +185,49 @@ describe('cancelling displaced preloads', () => {
     q.goto('d', { play: true });
     await flush();
     expect(signals.get('b')?.aborted).toBe(true);
+  });
+});
+
+describe('replaying an unloaded track', () => {
+  it('plays it through HTML5 again, and reports HTML5', async () => {
+    const q = new Queue({ preloadNumTracks: 0 });
+    q.setEntries([entry('a')], { play: false });
+    q.play();
+    await flush(); // a decodes and crosses over to Web Audio
+    const a = (q as Internal)._tracks[0];
+    expect(a.playbackType).toBe('WEBAUDIO');
+
+    q.pause();
+    a.deactivate();
+    expect(a.unload()).toBe(true); // buffer released, as when it leaves the window
+    a.activate();
+
+    mockFetchHanging(['a']); // the fresh download stays in flight
+    q.play();
+    await flush();
+    expect(a.machineState).toBe('html5');
+    expect(a.playbackType).toBe('HTML5');
+    expect(a.webAudioLoadingState).toBe('LOADING');
+  });
+});
+
+describe('a track that finished on Web Audio', () => {
+  it('lets go of its finished source node, which holds the decoded buffer, once unloaded', async () => {
+    const q = new Queue({ preloadNumTracks: 0 });
+    q.setEntries([entry('a'), entry('b')], { play: false });
+    q.play();
+    await flush(); // a decodes and plays on Web Audio
+    const a = (q as Internal)._tracks[0];
+    const node = a.sourceNode;
+    expect(a.playbackType).toBe('WEBAUDIO');
+    expect(node?.buffer).toBeTruthy();
+
+    // a ends; the queue moves on to b and unloads a, now outside the window.
+    node.simulateEnded();
+    await flush();
+    expect(a.webAudioLoadingState).toBe('NONE');
+    expect(a.isBufferLoaded).toBe(false);
+    expect(a.sourceNode).toBeNull(); // the node's buffer is the decoded audio
+    expect(node.disconnect).toHaveBeenCalled();
   });
 });
