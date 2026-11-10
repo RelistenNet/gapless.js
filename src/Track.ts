@@ -433,6 +433,9 @@ export class Track {
     this.queueRef.onDebug(`unload() track=${this.key} state=${state}`);
     this._dropPendingDecode();
     this.audioBuffer = null;
+    // A track that ended on Web Audio keeps its finished source node, whose
+    // buffer is the decoded audio: let it go too, or the memory stays held.
+    this._stopSourceNode();
     this._actor.send({ type: 'UNLOAD' });
     return true;
   }

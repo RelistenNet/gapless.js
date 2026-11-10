@@ -210,3 +210,24 @@ describe('replaying an unloaded track', () => {
     expect(a.webAudioLoadingState).toBe('LOADING');
   });
 });
+
+describe('a track that finished on Web Audio', () => {
+  it('lets go of its finished source node, which holds the decoded buffer, once unloaded', async () => {
+    const q = new Queue({ preloadNumTracks: 0 });
+    q.setEntries([entry('a'), entry('b')], { play: false });
+    q.play();
+    await flush(); // a decodes and plays on Web Audio
+    const a = (q as Internal)._tracks[0];
+    const node = a.sourceNode;
+    expect(a.playbackType).toBe('WEBAUDIO');
+    expect(node?.buffer).toBeTruthy();
+
+    // a ends; the queue moves on to b and unloads a, now outside the window.
+    node.simulateEnded();
+    await flush();
+    expect(a.webAudioLoadingState).toBe('NONE');
+    expect(a.isBufferLoaded).toBe(false);
+    expect(a.sourceNode).toBeNull(); // the node's buffer is the decoded audio
+    expect(node.disconnect).toHaveBeenCalled();
+  });
+});
