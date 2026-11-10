@@ -164,6 +164,9 @@ export function createTrackMachine(initialContext: TrackContext) {
       setPlaybackTypeWebAudio: assign({
         playbackType: () => 'WEBAUDIO' as PlaybackType,
       }),
+      setPlaybackTypeHtml5: assign({
+        playbackType: () => 'HTML5' as PlaybackType,
+      }),
       clearNotifiedLookahead: assign({
         notifiedLookahead: () => false,
       }),
@@ -298,6 +301,9 @@ export function createTrackMachine(initialContext: TrackContext) {
       // html5: HTML5 Audio is playing; WebAudio decode may be in progress
       // -----------------------------------------------------------------
       html5: {
+        // HTML5 is the output here, whatever played before: a track that ran
+        // on Web Audio, was unloaded and plays again starts over on HTML5.
+        entry: 'setPlaybackTypeHtml5',
         on: {
           PAUSE: {
             actions: [

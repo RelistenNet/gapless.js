@@ -187,3 +187,26 @@ describe('cancelling displaced preloads', () => {
     expect(signals.get('b')?.aborted).toBe(true);
   });
 });
+
+describe('replaying an unloaded track', () => {
+  it('plays it through HTML5 again, and reports HTML5', async () => {
+    const q = new Queue({ preloadNumTracks: 0 });
+    q.setEntries([entry('a')], { play: false });
+    q.play();
+    await flush(); // a decodes and crosses over to Web Audio
+    const a = (q as Internal)._tracks[0];
+    expect(a.playbackType).toBe('WEBAUDIO');
+
+    q.pause();
+    a.deactivate();
+    expect(a.unload()).toBe(true); // buffer released, as when it leaves the window
+    a.activate();
+
+    mockFetchHanging(['a']); // the fresh download stays in flight
+    q.play();
+    await flush();
+    expect(a.machineState).toBe('html5');
+    expect(a.playbackType).toBe('HTML5');
+    expect(a.webAudioLoadingState).toBe('LOADING');
+  });
+});
