@@ -9,19 +9,19 @@
   },
   "dependencies": {
     "@timber-js/app": "0.2.0-alpha.250",
-    "@vitejs/plugin-react": "^6.1.2",
-    "@vitejs/plugin-rsc": "^0.5.38",
+    "@vitejs/plugin-react": "^6.3.0",
+    "@vitejs/plugin-rsc": "^0.5.39",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "sugar-high": "^2.6.2",
-    "takumi-js": "^2.17.1"
+    "sugar-high": "^2.7.0",
+    "takumi-js": "^2.20.0"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "tailwindcss": "^4.3.3",
+    "tailwindcss": "^4.3.5",
     "typescript": "^7.0.2",
-    "vite": "8.3.5"
+    "vite": "8.3.8"
   }
 }
