@@ -36,6 +36,7 @@ type Gain = {
   setValueAtTime: ReturnType<typeof vi.fn>;
   setValueCurveAtTime: ReturnType<typeof vi.fn>;
   cancelScheduledValues: ReturnType<typeof vi.fn>;
+  linearRampToValueAtTime: ReturnType<typeof vi.fn>;
 };
 const fadeGain = (t: Track): Gain => (t as any)._fadeGainNode.gain;
 const lastCurve = (t: Track) => {
@@ -676,5 +677,53 @@ describe('review: speed changes, entry edits, destroyed tracks', () => {
     await flush(2);
     expect((a as any).gainNode).toBeNull();
     expect(ctx.createMediaElementSource.mock.calls.length).toBe(mediaSources);
+  });
+});
+
+describe('the outgoing track stalls while streaming', () => {
+  /** a streaming (not decoded) and routed, b decoded; a 4 s fade scheduled with 8 s left. */
+  async function scheduledFromStreaming() {
+    fetchHanging('a.mp3');
+    const q = new Queue({ crossfade: 4 });
+    q.setEntries(AB);
+    q.play();
+    await flush();
+    const [a, b] = (q as any)._tracks as Track[];
+    b.preload();
+    await flush();
+    nearEndOnHtml5(a, 8);
+    q.onTrackBufferReady(a);
+    await flush(2);
+    expect(a.playbackType).toBe('HTML5');
+    expect(b.hasScheduledStart).toBe(true);
+    return { q, a, b, t0: (a as any).ctx.currentTime as number };
+  }
+
+  it('before the fade: the transition moves with the new end', async () => {
+    const { q, a, b, t0 } = await scheduledFromStreaming();
+    expect(b.scheduledStartContextTime).toBeCloseTo(t0 + 4, 5);
+    advanceTime(3); // stalled: the element hasn't moved
+    q.onProgress(a, a.toInfo());
+    await flush(2);
+    expect(b.scheduledStartContextTime).toBeCloseTo(t0 + 3 + 4, 5);
+  });
+
+  it('mid-fade: the outgoing fade-out is re-aimed at the new end', async () => {
+    const { q, a, t0 } = await scheduledFromStreaming();
+    advanceTime(5); // 1 s into the fade...
+    el(a).currentTime = 175; // ...but the element only got 3 s further (2 s stalled)
+    q.onProgress(a, a.toInfo());
+    const ramp = fadeGain(a).linearRampToValueAtTime.mock.calls.at(-1);
+    expect(ramp).toEqual([0, expect.closeTo(t0 + 5 + 5, 5)]);
+  });
+
+  it('small drift leaves the transition alone', async () => {
+    const { q, a, b } = await scheduledFromStreaming();
+    const start = b.scheduledStartContextTime;
+    advanceTime(1);
+    el(a).currentTime = 172.9; // 0.1 s behind
+    q.onProgress(a, a.toInfo());
+    expect(b.scheduledStartContextTime).toBe(start);
+    expect(fadeGain(a).linearRampToValueAtTime).not.toHaveBeenCalled();
   });
 });

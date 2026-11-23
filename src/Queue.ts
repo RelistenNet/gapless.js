@@ -783,6 +783,7 @@ export class Queue implements TrackQueueRef {
 
   onProgress(track: Track, info: TrackInfo): void {
     if (track !== this._currentTrack) return;
+    this._reconcileStreamingTransition(track);
     if (!isNaN(info.duration)) {
       this._throttledUpdatePositionState(info.duration, info.currentTime, this._playbackRate);
     }
@@ -805,6 +806,42 @@ export class Queue implements TrackQueueRef {
 
   indexOf(track: Track): number {
     return this._tracks.indexOf(track);
+  }
+
+  onTimingChanged(track: Track): void {
+    if (track === this._currentTrack) this._reconcileStreamingTransition(track);
+  }
+
+  /**
+   * A transition timed from a streaming track's predicted end goes wrong if
+   * the element stalls: its clock stops while the AudioContext's runs on.
+   * When the prediction moves by more than FADE_DRIFT_SEC, re-aim: before
+   * the fade nothing is audible yet, so reschedule; mid-fade, retime the
+   * outgoing fade-out to the new end (the incoming track plays on).
+   */
+  private _reconcileStreamingTransition(current: Track): void {
+    const was = this._scheduledFor;
+    const next = this._scheduledNext;
+    const ctx = getAudioContext();
+    if (!was || !next || !ctx || was.type !== 'HTML5' || current.playbackType !== 'HTML5') return;
+    if (!current.isPlaying) return;
+    const end = this._computeTrackEndTime(current);
+    if (end === null || Math.abs(end - was.endTime) <= FADE_DRIFT_SEC) return;
+    if (was.start <= ctx.currentTime) {
+      // Already under way. A gapless start that has begun is left be (the
+      // mute at the old end silences the stalled element, as before).
+      if (was.want <= 0) return;
+      this.onDebug(
+        `stream moved ${next.key}'s fade: end ${was.endTime.toFixed(2)} → ${end.toFixed(2)}`
+      );
+      current.retimeFade(0, end);
+      this._scheduledFor = { ...was, endTime: end };
+    } else {
+      this.onDebug(
+        `stream moved ${next.key}'s start: end ${was.endTime.toFixed(2)} → ${end.toFixed(2)}`
+      );
+      this._rescheduleGapless(current, true);
+    }
   }
 
   crossfadeAfter(track: Track): number {

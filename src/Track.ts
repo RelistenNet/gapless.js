@@ -36,6 +36,12 @@ export interface TrackQueueRef {
    * transition must be scheduled that much earlier than a gapless one.
    */
   crossfadeAfter?(track: Track): number;
+  /**
+   * The element's timing may have moved (it resumed after a stall, or
+   * reported progress): a transition timed from it may need re-aiming. Fires
+   * without the progress loop, which doesn't run in a background tab.
+   */
+  onTimingChanged?(track: Track): void;
 }
 
 /** How close to the end (in seconds) before we attempt gapless scheduling. */
@@ -277,6 +283,9 @@ export class Track {
         new Error(`HTML5 audio error on track ${this.key} (code ${code}): ${msg}`)
       );
     };
+    const timingChanged = () => this.queueRef.onTimingChanged?.(this);
+    this.audio.addEventListener('playing', timingChanged);
+    this.audio.addEventListener('timeupdate', timingChanged);
     this.audio.onended = () => {
       this.queueRef.onDebug(
         `audio.onended track=${this.key} machineState=${this._actor.getSnapshot().value} queueCurrent=${this.queueRef.currentKey}`
