@@ -12,7 +12,7 @@ import {
 } from './utils/mediaSession';
 import { createQueueMachine } from './machines/queue.machine';
 import type { PlayList } from './machines/queue.machine';
-import { Track } from './Track';
+import { Track, normalizeClip } from './Track';
 import type { TrackQueueRef } from './Track';
 import { throttle } from './utils/throttle';
 import type {
@@ -357,6 +357,7 @@ export class Queue implements TrackQueueRef {
 
   addTrack(url: string, options: AddTrackOptions = {}): void {
     if (options.key !== undefined) this._assertUniqueKeys([options.key], true);
+    normalizeClip(options.start, options.end);
     const metadata = options.metadata ?? ({} as TrackMetadata);
     const track = new Track({
       trackUrl: url,
@@ -364,6 +365,8 @@ export class Queue implements TrackQueueRef {
       key: options.key ?? this._newKey(),
       skipHEAD: options.skipHEAD,
       metadata,
+      start: options.start,
+      end: options.end,
     });
     this._tracks.push(track);
     this._orderVersion++;
@@ -404,6 +407,7 @@ export class Queue implements TrackQueueRef {
       entries.map((e) => e.key),
       false
     );
+    this._assertValidClips(entries);
     const byKey = new Map(this._tracks.map((t) => [t.key, t]));
     const next = entries.map((e) => byKey.get(e.key) ?? this._createTrack(e));
     const kept = new Set(next);
@@ -441,6 +445,7 @@ export class Queue implements TrackQueueRef {
       entries.map((e) => e.key),
       true
     );
+    this._assertValidClips(entries);
     const at = this._insertionIndex(position);
     if (at === -1) return;
     const next = [...this._tracks];
@@ -496,6 +501,8 @@ export class Queue implements TrackQueueRef {
         url: t.sourceUrl,
         metadata: t.metadata,
         ...(t.skipHEAD ? { skipHEAD: true } : {}),
+        ...(t.clipStart > 0 ? { start: t.clipStart } : {}),
+        ...(t.clipEnd !== null ? { end: t.clipEnd } : {}),
       })),
       currentKey: cur?.key ?? null,
       currentTime: cur ? cur.currentTime : 0,
@@ -787,6 +794,8 @@ export class Queue implements TrackQueueRef {
       key: e.key,
       skipHEAD: e.skipHEAD,
       metadata: e.metadata ?? {},
+      start: e.start,
+      end: e.end,
     });
   }
 
@@ -817,6 +826,11 @@ export class Queue implements TrackQueueRef {
    * the queue. Checked before any change, so a rejected edit leaves the queue
    * as it was.
    */
+  /** Throws on a bad clip range before any track is created, so a failed edit changes nothing. */
+  private _assertValidClips(entries: readonly Entry[]): void {
+    for (const e of entries) normalizeClip(e.start, e.end);
+  }
+
   private _assertUniqueKeys(keys: readonly string[], againstQueue: boolean): void {
     const seen = new Set(againstQueue ? this._tracks.map((t) => t.key) : []);
     for (const key of keys) {

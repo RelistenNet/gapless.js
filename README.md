@@ -215,6 +215,16 @@ player.addTrack('https://example.com/track.mp3', {
 });
 ```
 
+#### Clips
+
+Pass `start` and/or `end` (seconds into the file) to play only part of a file. Entries passed to `setEntries`/`insert` take the same fields, and `snapshot()` keeps them.
+
+```typescript
+player.addTrack('https://example.com/set.mp3', { start: 754.2, end: 1131.8 });
+```
+
+Times the queue reports and accepts (`currentTime`, `duration`, `seek`) are relative to the clip, so a clip behaves like a short track. Consecutive clips, from the same file or from different files, join gaplessly on Web Audio. The whole file is still downloaded and decoded, and each clip loads its own copy. During HTML5 playback (before the decode finishes) a clip is stopped by polling, so it can run a few milliseconds past `end`.
+
 ### `TrackMetadata`
 
 Metadata is used for the [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API) (lock screen controls, browser media UI) and can contain arbitrary additional fields:
