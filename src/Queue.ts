@@ -134,6 +134,8 @@ export class Queue implements TrackQueueRef {
 
   /** The scheduled track, if it reported its end before it became current. */
   private _scheduledEndedEarly: Track | null = null;
+  /** Retries a transition deferred until it is near (see _tryScheduleGapless). */
+  private _retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** @internal Index of the scheduled track (debugging and tests). */
   get _scheduledNextIndex(): number | null {
@@ -642,6 +644,8 @@ export class Queue implements TrackQueueRef {
   }
 
   destroy(): void {
+    if (this._retryTimer !== null) clearTimeout(this._retryTimer);
+    this._retryTimer = null;
     this._stopMediaSessionAnchor();
     this._mediaSessionAnchor = null;
     for (const track of this._tracks) track.destroy();
@@ -1112,8 +1116,11 @@ export class Queue implements TrackQueueRef {
     const nearOnly = current.playbackType === 'HTML5' || !next.isBufferLoaded;
     if (nearOnly && timeUntilEnd > horizon) {
       this.onDebug(
-        `_tryScheduleGapless: deferring — HTML5 track ${current.key} has ${timeUntilEnd.toFixed(1)}s remaining (max lookahead=${horizon}s)`
+        `_tryScheduleGapless: deferring — ${current.key} has ${timeUntilEnd.toFixed(1)}s remaining (max lookahead=${horizon}s)`
       );
+      // The track's lookahead notice may already be spent (a fade shortened
+      // after it, say), so come back when the transition is near.
+      this._retryScheduleIn(timeUntilEnd - horizon + 0.1, current);
       return;
     }
 
@@ -1149,6 +1156,16 @@ export class Queue implements TrackQueueRef {
     );
     this._scheduledNext = next;
     this._scheduledFor = { endTime, start, type: current.playbackType, want };
+  }
+
+  private _retryScheduleIn(seconds: number, current: Track): void {
+    if (this._retryTimer !== null) clearTimeout(this._retryTimer);
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = null;
+      if (this._currentTrack === current && this.isPlaying && !this._scheduledNext) {
+        this._tryScheduleGapless(current);
+      }
+    }, seconds * 1000);
   }
 
   /** Whether `track` can fade out: on Web Audio, or streaming through the AudioContext. */

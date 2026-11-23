@@ -520,3 +520,35 @@ describe('codex review: edge cases', () => {
     expect(b.hasScheduledStart).toBe(true);
   });
 });
+
+describe('a deferred transition is retried', () => {
+  it('shortening a pending streaming fade still fades, once the new window comes', async () => {
+    // Codex: an 8 s fade schedules at 13 s left; setCrossfade(2) at 12 s left
+    // cancels it and defers the replacement (horizon 7.5 s), but the lookahead
+    // was spent, so nothing ever retried and the fade became a cut.
+    fetchHanging('b.mp3');
+    const q = new Queue({ crossfade: 8 });
+    q.setEntries(AB);
+    q.play();
+    await flush();
+    const [a, b] = (q as any)._tracks as Track[];
+    const left = (s: number) =>
+      advanceTime(a.playbackEndContextTime! - s - (a as any).ctx.currentTime);
+    left(13);
+    await flush(); // lookahead (13 s) fires and schedules the streaming start
+    expect(b.hasScheduledStart).toBe(true);
+
+    vi.useFakeTimers();
+    try {
+      left(12);
+      q.setCrossfade(2);
+      expect(b.hasScheduledStart).toBe(false); // deferred: not near yet
+      left(7.4);
+      vi.advanceTimersByTime(4700);
+      expect(b.hasScheduledStart).toBe(true);
+      expect(lastCurve(b)![2]).toBeCloseTo(2, 5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
