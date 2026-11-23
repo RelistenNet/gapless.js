@@ -330,9 +330,9 @@ export class Track {
           this.sourceNode.start(when, this._bufferStartPaddingSec + this.clipStart);
           const bufRemaining = this._bufferClipLength;
           const schedRate = this.sourceNode.playbackRate.value || 1;
-          if (bufRemaining > 0) {
-            this.sourceNode.stop(when + bufRemaining / schedRate);
-          }
+          // Always stop: a clip ends before its file, so an unstopped source
+          // would play on past clipEnd. Zero remaining stops it on start.
+          this.sourceNode.stop(when + Math.max(0, bufRemaining) / schedRate);
           this._waRefCtxTime = when;
           this._waRefTrackTime = 0;
           this.queueRef.onDebug(
@@ -428,12 +428,10 @@ export class Track {
       this.sourceNode.playbackRate.value = rate;
       if (this.audioBuffer && this.ctx) {
         const remaining = this._bufferClipLength - this._waRefTrackTime;
-        if (remaining > 0) {
-          try {
-            this.sourceNode.stop(this._waRefCtxTime + remaining / rate);
-          } catch {
-            /* already stopped */
-          }
+        try {
+          this.sourceNode.stop(this._waRefCtxTime + Math.max(0, remaining) / rate);
+        } catch {
+          /* already stopped */
         }
       }
     }
@@ -876,10 +874,11 @@ export class Track {
     this._waRefTrackTime = effectiveOffset;
     this.sourceNode.start(when, effectiveOffset + this._bufferStartPaddingSec + this.clipStart);
 
+    // Always stop, even with nothing left (a seek to the clip end, or a start
+    // within one lead of it): a clip ends before its file, and an unstopped
+    // source would play on through the rest of the file.
     const bufRemaining = maxOffset - effectiveOffset;
-    if (bufRemaining > 0) {
-      this.sourceNode.stop(when + bufRemaining / rate);
-    }
+    this.sourceNode.stop(when + Math.max(0, bufRemaining) / rate);
     return when;
   }
 

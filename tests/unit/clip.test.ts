@@ -99,6 +99,29 @@ describe('clip on Web Audio', () => {
     t.seek(999);
     expect(t.seekTarget).toBe(45); // clamped to the clip
   });
+
+  it('stops the source at once when started with no clip time left', () => {
+    // Regression: with zero remaining, no stop() was scheduled and the
+    // source played on from clipEnd through the rest of the file.
+    const t = new Track({ trackUrl: 'a.mp3', queue: makeQueue(), start: 30, end: 75 });
+    t.audioBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
+    t.play();
+    t.seek(45);
+    const sources = startedSources(t);
+    const last = sources[sources.length - 1];
+    const [when] = last.start.mock.calls[0] as [number];
+    expect(last.stop).toHaveBeenCalledTimes(1);
+    const [stopAt] = last.stop.mock.calls[0] as unknown as [number];
+    expect(stopAt).toBeCloseTo(when, 5);
+  });
+
+  it('stops a clip shorter than the scheduling lead', () => {
+    const t = new Track({ trackUrl: 'a.mp3', queue: makeQueue(), start: 30, end: 30.01 });
+    t.audioBuffer = new MockAudioBuffer(180) as unknown as AudioBuffer;
+    t.play();
+    const [src] = startedSources(t);
+    expect(src.stop).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('clip on HTML5', () => {
