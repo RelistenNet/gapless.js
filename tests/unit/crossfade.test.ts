@@ -825,3 +825,23 @@ describe('buffering one further ahead during a transition', () => {
     expect(el(c).preload).toBe('auto');
   });
 });
+
+describe('no buffering further ahead after a gapless start', () => {
+  it('a gapless a → b leaves c (fading in after b) alone until b is current', async () => {
+    fetchHanging('c.mp3');
+    const q = new Queue({ preloadNumTracks: 1 });
+    q.setEntries([...AB, { key: 'c', url: 'c.mp3', crossfade: 4 }]);
+    q.play();
+    await flush();
+    const [a, b, c] = (q as any)._tracks as Track[];
+    b.preload();
+    await flush();
+    expect(a.playbackType).toBe('WEBAUDIO');
+    expect(b.hasScheduledStart).toBe(true); // a → b is gapless, scheduled early
+    expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime!, 5);
+    // Never started at all: not started and then released (which would also
+    // leave preload 'none'). Priming and releasing both go through load().
+    expect(el(c).load).not.toHaveBeenCalled();
+    expect(el(c).preload).toBe('none');
+  });
+});

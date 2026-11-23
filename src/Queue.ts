@@ -1248,8 +1248,10 @@ export class Queue implements TrackQueueRef {
     this._scheduledFor = { endTime, start, type: current.playbackType, want };
     // A track that fades in starts early, so once it is scheduled it is all
     // but current: buffer what fades in after it now, or that fade gets only
-    // its clip length minus the fade of lead.
-    this._primeStreamingFadeAfter(next);
+    // its clip length minus the fade of lead. Only for a fade, as the window
+    // only reaches that far then (_unloadOutsideWindow): a gapless start is
+    // scheduled minutes ahead, and this would start a download only to drop it.
+    if (fade > 0) this._primeStreamingFadeAfter(next);
   }
 
   private _retryScheduleIn(seconds: number, current: Track): void {
