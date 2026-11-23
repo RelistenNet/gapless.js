@@ -31,6 +31,8 @@ import type {
 
 const MAX_SCHEDULE_LOOKAHEAD = 5;
 
+/** The longest delay setTimeout supports. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 /** Leeway past the scheduling horizon, so a lookahead notice right at it isn't refused. */
 const HORIZON_SLACK_SEC = 0.5;
 /** A crossfade shorter than this is played as a gapless cut instead. */
@@ -1235,6 +1237,10 @@ export class Queue implements TrackQueueRef {
 
   private _retryScheduleIn(seconds: number, current: Track): void {
     if (this._retryTimer !== null) clearTimeout(this._retryTimer);
+    this._retryTimer = null;
+    // A delay timers can't hold (setTimeout turns one past 2^31-1 ms, or not
+    // finite, into an immediate call, which would retry in a busy loop).
+    if (!isFinite(seconds) || seconds * 1000 > MAX_TIMER_MS) return;
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
       if (this._currentTrack === current && this.isPlaying && !this._scheduledNext) {
@@ -1289,7 +1295,8 @@ export class Queue implements TrackQueueRef {
     }
 
     const duration = track.duration;
-    if (isNaN(duration)) return null;
+    // NaN (not loaded) or Infinity (a live stream): no end to schedule against.
+    if (!isFinite(duration)) return null;
     const remaining = (duration - track.currentTime) / this._playbackRate;
     if (remaining <= 0) return null;
     return ctx.currentTime + remaining;

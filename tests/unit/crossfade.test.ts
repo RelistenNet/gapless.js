@@ -727,3 +727,24 @@ describe('the outgoing track stalls while streaming', () => {
     expect(fadeGain(a).linearRampToValueAtTime).not.toHaveBeenCalled();
   });
 });
+
+describe('a track with no end (a live stream)', () => {
+  it('schedules nothing and sets no retry timer', async () => {
+    fetchHanging('a.mp3');
+    const q = new Queue({ crossfade: 4 });
+    q.setEntries(AB);
+    q.play();
+    await flush();
+    const [a, b] = (q as any)._tracks as Track[];
+    el(a).simulateLoadedMetadata(Infinity); // live: duration is Infinity
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    q.onTrackBufferReady(a);
+    await flush(2);
+    const retries = timers.mock.calls.filter((c) => typeof c[1] === 'number' && c[1] > 0);
+    timers.mockRestore();
+    expect((q as any)._computeTrackEndTime(a)).toBeNull();
+    expect(retries).toHaveLength(0);
+    expect((q as any)._retryTimer).toBeNull();
+    expect(b.hasScheduledStart).toBe(false);
+  });
+});
