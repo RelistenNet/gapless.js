@@ -1053,6 +1053,13 @@ export class Queue implements TrackQueueRef {
    */
   private _unloadOutsideWindow(from: Track | null | undefined): void {
     const window = new Set(from ? this._preloadWindow(from) : []);
+    // While a crossfade is scheduled, the incoming track's window counts too
+    // (see _tryScheduleGapless): it starts early, so it is all but current.
+    // Not for a gapless start, scheduled as soon as both are decoded, often
+    // minutes ahead: that would keep one more decoded track all along.
+    if (from && this._scheduledNext && (this._scheduledFor?.want ?? 0) > 0) {
+      for (const t of this._preloadWindow(this._scheduledNext)) window.add(t);
+    }
     for (const t of this._tracks) if (!window.has(t)) t.unload();
   }
 
@@ -1060,6 +1067,12 @@ export class Queue implements TrackQueueRef {
     this._unloadOutsideWindow(from);
     if (!from) return;
     const cur = from;
+
+    // A next entry that will fade in by streaming (not decoded yet) starts
+    // buffering its clip start now, not when the fade is scheduled: on a slow
+    // link that is the difference between a fade and seconds of silence.
+    // Before the bandwidth gate below, as it is what a slow link needs first.
+    if (cur.isPlaying) this._primeStreamingFadeAfter(cur);
 
     // Bandwidth-contention gate: while the current track is playing via HTML5
     // and its own Web Audio buffer is still being fetched+decoded, holding
@@ -1233,6 +1246,12 @@ export class Queue implements TrackQueueRef {
     );
     this._scheduledNext = next;
     this._scheduledFor = { endTime, start, type: current.playbackType, want };
+    // A track that fades in starts early, so once it is scheduled it is all
+    // but current: buffer what fades in after it now, or that fade gets only
+    // its clip length minus the fade of lead. Only for a fade, as the window
+    // only reaches that far then (_unloadOutsideWindow): a gapless start is
+    // scheduled minutes ahead, and this would start a download only to drop it.
+    if (fade > 0) this._primeStreamingFadeAfter(next);
   }
 
   private _retryScheduleIn(seconds: number, current: Track): void {
@@ -1247,6 +1266,26 @@ export class Queue implements TrackQueueRef {
         this._tryScheduleGapless(current);
       }
     }, seconds * 1000);
+  }
+
+  /**
+   * If the entry after `track` will fade in by streaming (not decoded yet),
+   * start its element buffering from the clip start now.
+   */
+  private _primeStreamingFadeAfter(track: Track): void {
+    // Buffering ahead is preloading: not when it's switched off (and the
+    // window would release the element straight away, restarting it next
+    // pass). The scheduled start still primes it when the fade is near.
+    if (this._preloadNumTracks < 1) return;
+    const next = this._scheduleTargetOf(track);
+    if (
+      next &&
+      !next.isBufferLoaded &&
+      (next.crossfadeIn ?? this._crossfade) > 0 &&
+      (track.playbackType === 'WEBAUDIO' || track.canFadeHtml5)
+    ) {
+      next.primeHtml5();
+    }
   }
 
   /** Whether `track` can fade out: on Web Audio, or streaming through the AudioContext. */

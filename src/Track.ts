@@ -117,6 +117,8 @@ export class Track {
   /** Seconds to crossfade into this track, or null to use the queue's default. */
   private _crossfadeIn: number | null;
   private _destroyed = false;
+  /** The element was set buffering from the clip start (see primeHtml5). */
+  private _primed = false;
   /** When the HTML5 clip-end mute is set for (AudioContext time), or null (see cancelHtml5Mute). */
   private _clipEndMuteAt: number | null = null;
 
@@ -546,6 +548,10 @@ export class Track {
    */
   unload(): boolean {
     const { context } = this._actor.getSnapshot();
+    // An element buffering ahead for a crossfade stops too.
+    if (this._primed && !context.isPlaying && !context.pendingPlay && !this._html5Start) {
+      this._releaseHtml5Element();
+    }
     const state = context.webAudioLoadingState;
     if (state !== 'LOADING' && state !== 'LOADED') return false;
     if (context.isPlaying || context.pendingPlay) return false;
@@ -578,6 +584,7 @@ export class Track {
     if (this._html5Start?.timer) clearTimeout(this._html5Start.timer);
     this._html5Start = null;
     this.deactivate();
+    this._releaseHtml5Element(); // stop any download the element still has going
     this._dropPendingDecode();
     this.audioBuffer = null;
     this.gainNode?.disconnect();
@@ -660,7 +667,7 @@ export class Track {
     if (state !== 'idle' && state !== 'loading') return false;
     this._cancelHtml5Start();
     this._rampFade(FADE_IN_CURVE, when, fadeIn);
-    this._seekHtml5(0); // buffer from the clip start ahead of time
+    this.primeHtml5(); // buffer from the clip start ahead of time (once)
     const delayMs = Math.max(0, (when - this.ctx.currentTime) * 1000);
     this._html5Start = {
       when,
@@ -677,6 +684,22 @@ export class Track {
       }, delayMs),
     };
     return true;
+  }
+
+  /**
+   * Start the element buffering from the clip start, for a crossfade that
+   * may have to stream this track in before it is decoded. Once: a second
+   * call before the metadata arrives would reload the element and throw away
+   * what it has buffered (on a slow link, the difference between a fade and
+   * seconds of silence). Released by unload() and destroy().
+   */
+  primeHtml5(): void {
+    if (this._primed || this._playbackMethod !== 'HYBRID' || !this.canFadeHtml5) return;
+    const state = this._actor.getSnapshot().value;
+    if (state !== 'idle' && state !== 'loading') return;
+    this._primed = true;
+    this.queueRef.onDebug(`primeHtml5 track=${this.key}`);
+    this._seekHtml5(0);
   }
 
   /** Whether a start is scheduled (Web Audio or HTML5) and hasn't been cancelled. */
@@ -945,7 +968,9 @@ export class Track {
   }
 
   private async _fetchAndDecode(url: string, signal: AbortSignal): Promise<AudioBuffer> {
-    const res = await fetch(url, { signal });
+    // Low priority: this whole-file download is for a later handoff to Web
+    // Audio, and mustn't starve the elements playing now or about to.
+    const res = await fetch(url, { signal, priority: 'low' });
     if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
     const bytes = await res.arrayBuffer();
     // The shared context, not this.ctx: the load outlives this track when
@@ -961,6 +986,7 @@ export class Track {
    * starts it fresh.
    */
   private _releaseHtml5Element(): void {
+    this._primed = false;
     this.audio.pause();
     this._seekAbort.abort();
     this._seekAbort = new AbortController();
