@@ -30,6 +30,17 @@ import type {
 
 const MAX_SCHEDULE_LOOKAHEAD = 5;
 
+/** A crossfade shorter than this is played as a gapless cut instead. */
+const MIN_CROSSFADE_SEC = 0.1;
+/** How far ahead of now a crossfade can start, so both ramps are in the future. */
+const CROSSFADE_LEAD_SEC = 0.05;
+
+function assertCrossfade(seconds: number | undefined): void {
+  if (seconds !== undefined && !(seconds >= 0 && isFinite(seconds))) {
+    throw new Error(`gapless: crossfade must be a finite number >= 0 (got ${seconds})`);
+  }
+}
+
 /**
  * Lazy singleton Blob URL for a 10-second silent WAV.
  * Chrome requires a media element with >= 5 s intrinsic duration to treat it
@@ -84,6 +95,7 @@ export class Queue implements TrackQueueRef {
 
   private _volume: number;
   private _repeat: RepeatMode;
+  private _crossfade: number;
   private readonly _changeListeners = new Set<(change: QueueChange) => void>();
   /** Bumped on every structural edit; with currentKey and repeat, decides when onChange fires. */
   private _orderVersion = 0;
@@ -135,8 +147,11 @@ export class Queue implements TrackQueueRef {
       preloadNumTracks = 2,
       playbackRate: initialPlaybackRate = 1,
       repeat = 'off',
+      crossfade = 0,
     } = options;
     this._repeat = repeat;
+    assertCrossfade(crossfade);
+    this._crossfade = crossfade;
 
     this._volume = Math.min(1, Math.max(0, initialVolume));
     this._preloadNumTracks = Math.max(0, preloadNumTracks);
@@ -358,6 +373,7 @@ export class Queue implements TrackQueueRef {
   addTrack(url: string, options: AddTrackOptions = {}): void {
     if (options.key !== undefined) this._assertUniqueKeys([options.key], true);
     normalizeClip(options.start, options.end);
+    assertCrossfade(options.crossfade);
     const metadata = options.metadata ?? ({} as TrackMetadata);
     const track = new Track({
       trackUrl: url,
@@ -367,6 +383,7 @@ export class Queue implements TrackQueueRef {
       metadata,
       start: options.start,
       end: options.end,
+      crossfade: options.crossfade,
     });
     this._tracks.push(track);
     this._orderVersion++;
@@ -492,6 +509,26 @@ export class Queue implements TrackQueueRef {
     return this._repeat;
   }
 
+  /**
+   * Default crossfade (seconds) between tracks, for entries that don't set
+   * their own `crossfade`. 0 (the default) keeps transitions gapless.
+   */
+  setCrossfade(seconds: number): void {
+    assertCrossfade(seconds);
+    if (seconds === this._crossfade) return;
+    this._crossfade = seconds;
+    // A transition already scheduled was timed for the old length.
+    const cur = this._currentTrack;
+    if (cur && this._scheduledNext && this._scheduledNext.crossfadeIn === null) {
+      this._cancelScheduledGapless();
+      if (this.isPlaying) this._tryScheduleGapless(cur);
+    }
+  }
+
+  get crossfade(): number {
+    return this._crossfade;
+  }
+
   /** A plain-data copy of the queue, for persisting and `restore()`. */
   snapshot(): QueueSnapshot {
     const cur = this._currentTrack;
@@ -503,6 +540,7 @@ export class Queue implements TrackQueueRef {
         ...(t.skipHEAD ? { skipHEAD: true } : {}),
         ...(t.clipStart > 0 ? { start: t.clipStart } : {}),
         ...(t.clipEnd !== null ? { end: t.clipEnd } : {}),
+        ...(t.crossfadeIn !== null ? { crossfade: t.crossfadeIn } : {}),
       })),
       currentKey: cur?.key ?? null,
       currentTime: cur ? cur.currentTime : 0,
@@ -796,6 +834,7 @@ export class Queue implements TrackQueueRef {
       metadata: e.metadata ?? {},
       start: e.start,
       end: e.end,
+      crossfade: e.crossfade,
     });
   }
 
@@ -828,7 +867,10 @@ export class Queue implements TrackQueueRef {
    */
   /** Throws on a bad clip range before any track is created, so a failed edit changes nothing. */
   private _assertValidClips(entries: readonly Entry[]): void {
-    for (const e of entries) normalizeClip(e.start, e.end);
+    for (const e of entries) {
+      normalizeClip(e.start, e.end);
+      assertCrossfade(e.crossfade);
+    }
   }
 
   private _assertUniqueKeys(keys: readonly string[], againstQueue: boolean): void {
@@ -952,6 +994,8 @@ export class Queue implements TrackQueueRef {
     // is managed by the crossfade ramp — cancelScheduledValues would wipe it.
     const cur = this._currentTrack;
     if (cur && cur.playbackType === 'HTML5') cur.cancelHtml5Mute();
+    // A crossfade's fade-out on the current track goes with it.
+    cur?.cancelFadeOut();
     this._scheduledNext = null;
   }
 
@@ -983,7 +1027,8 @@ export class Queue implements TrackQueueRef {
       return;
     }
 
-    if (!next.scheduleGaplessStart(endTime)) {
+    const { start, fade } = this._crossfadeWindow(current, next, endTime, ctx.currentTime);
+    if (!next.scheduleGaplessStart(start, fade)) {
       this.onDebug(
         `_tryScheduleGapless: track ${next.key} rejected SCHEDULE_GAPLESS (state=${next.machineState})`
       );
@@ -995,10 +1040,34 @@ export class Queue implements TrackQueueRef {
     if (current.playbackType === 'HTML5') {
       current.scheduleHtml5Mute(endTime);
     }
+    if (fade > 0) current.scheduleFadeOut(start, fade);
     this.onDebug(
-      `_tryScheduleGapless: scheduled track ${next.key} at endTime=${endTime.toFixed(3)} (in ${(endTime - ctx.currentTime).toFixed(1)}s) curPlaybackType=${current.playbackType}`
+      `_tryScheduleGapless: scheduled track ${next.key} at ${start.toFixed(3)} endTime=${endTime.toFixed(3)} (in ${(start - ctx.currentTime).toFixed(1)}s) crossfade=${fade.toFixed(2)}s curPlaybackType=${current.playbackType}`
     );
     this._scheduledNext = next;
+  }
+
+  /**
+   * When `next` starts and how long it fades in, for a transition ending at
+   * `endTime`. Gapless (start = endTime, fade 0) unless a crossfade applies:
+   * next's own `crossfade`, else the queue default. The fade is cut to fit
+   * both tracks and the time left, and dropped if too little is left.
+   * Only a current track on Web Audio fades: an HTML5 end time is a guess.
+   */
+  private _crossfadeWindow(
+    current: Track,
+    next: Track,
+    endTime: number,
+    now: number
+  ): { start: number; fade: number } {
+    const gapless = { start: endTime, fade: 0 };
+    const want = next.crossfadeIn ?? this._crossfade;
+    if (want <= 0 || current.playbackType !== 'WEBAUDIO') return gapless;
+    const rate = this._playbackRate;
+    const fit = Math.min(want, current.duration / rate, next.duration / rate);
+    const start = Math.max(endTime - fit, now + CROSSFADE_LEAD_SEC);
+    const fade = endTime - start;
+    return fade >= MIN_CROSSFADE_SEC ? { start, fade } : gapless;
   }
 
   private _computeTrackEndTime(track: Track): number | null {

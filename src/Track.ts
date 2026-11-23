@@ -51,6 +51,15 @@ const CROSSOVER_FADE_SEC = 0.03;
 
 let _autoKey = 0;
 
+/** Equal-power crossfade curves: the two gains' squares sum to 1 throughout. */
+const CURVE_POINTS = 64;
+const FADE_IN_CURVE = Float32Array.from({ length: CURVE_POINTS }, (_, i) =>
+  Math.sin(((i / (CURVE_POINTS - 1)) * Math.PI) / 2)
+);
+const FADE_OUT_CURVE = Float32Array.from({ length: CURVE_POINTS }, (_, i) =>
+  Math.cos(((i / (CURVE_POINTS - 1)) * Math.PI) / 2)
+);
+
 /**
  * Check a clip range (seconds into the file). Throws on a range that can't
  * play; returns it normalized (start defaults to 0, end to null = file end).
@@ -86,6 +95,8 @@ export class Track {
   readonly clipStart: number;
   /** End of the clip in file seconds, or null to play to the end of the file. */
   readonly clipEnd: number | null;
+  /** Seconds to crossfade into this track, or null to use the queue's default. */
+  readonly crossfadeIn: number | null;
 
   private _trackUrl: string;
   private _resolvedUrl: string;
@@ -108,6 +119,10 @@ export class Track {
       this.gainNode = context.createGain();
       this.gainNode.gain.value = this.audio.volume;
       this.gainNode.connect(context.destination);
+      // Crossfades ramp this node; volume stays on gainNode, so setVolume
+      // can't cancel a fade in progress (or a fade pin the volume).
+      this._fadeGainNode = context.createGain();
+      this._fadeGainNode.connect(this.gainNode);
 
       // Route the HTML5 element through the AudioContext via a
       // MediaElementAudioSourceNode + dedicated GainNode. With this routing,
@@ -142,6 +157,10 @@ export class Track {
   private gainNode: GainNode | null = null;
   private _mediaElementSource: MediaElementAudioSourceNode | null = null;
   private _html5GainNode: GainNode | null = null;
+  /** Between Web Audio sources and gainNode; carries crossfade ramps. */
+  private _fadeGainNode: GainNode | null = null;
+  /** Fade-in length (s) for the scheduled start, 0 for a gapless one. */
+  private _scheduledFadeIn = 0;
   private sourceNode: AudioBufferSourceNode | null = null;
   audioBuffer: AudioBuffer | null = null;
   /** AudioContext.currentTime at the start of the current playback segment. */
@@ -189,7 +208,13 @@ export class Track {
     start?: number;
     /** Seconds into the file to stop at. */
     end?: number;
+    /** Seconds to crossfade into this track from the one before it. */
+    crossfade?: number;
   }) {
+    if (opts.crossfade !== undefined && !(opts.crossfade >= 0 && isFinite(opts.crossfade))) {
+      throw new Error(`gapless: crossfade must be a finite number >= 0 (got ${opts.crossfade})`);
+    }
+    this.crossfadeIn = opts.crossfade ?? null;
     const clip = normalizeClip(opts.start, opts.end);
     this.clipStart = clip.start;
     this.clipEnd = clip.end;
@@ -329,8 +354,13 @@ export class Track {
           this.sourceNode = this.ctx.createBufferSource();
           this.sourceNode.buffer = this.audioBuffer;
           this.sourceNode.playbackRate.value = this.queueRef.playbackRate;
-          this.sourceNode.connect(this.gainNode);
+          this.sourceNode.connect(this._sourceOutput);
           this.sourceNode.onended = this._handleWebAudioEnded;
+          if (this._scheduledFadeIn > 0) {
+            this._rampFade(FADE_IN_CURVE, when, this._scheduledFadeIn);
+          } else {
+            this._resetFade();
+          }
           this.sourceNode.start(when, this._bufferStartPaddingSec + this.clipStart);
           const bufRemaining = this._bufferClipLength;
           const schedRate = this.sourceNode.playbackRate.value || 1;
@@ -528,15 +558,61 @@ export class Track {
   cancelGaplessStart(): void {
     const snap = this._actor.getSnapshot();
     if (snap.context.scheduledStartContextTime === null) return;
+    this._scheduledFadeIn = 0;
     this._actor.send({ type: 'CANCEL_GAPLESS' });
   }
 
-  scheduleGaplessStart(when: number): boolean {
+  /**
+   * Start this track at `when` on the AudioContext clock: gapless, or fading
+   * in over `fadeIn` seconds while the previous track fades out.
+   */
+  scheduleGaplessStart(when: number, fadeIn = 0): boolean {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return false;
     const state = this._actor.getSnapshot().value;
     if (state !== 'idle' && state !== 'loading') return false;
+    this._scheduledFadeIn = fadeIn;
     this._actor.send({ type: 'SCHEDULE_GAPLESS', when });
     return true;
+  }
+
+  /** Fade this (playing) track out over `duration` seconds from `at`, for a crossfade. */
+  scheduleFadeOut(at: number, duration: number): void {
+    this._rampFade(FADE_OUT_CURVE, at, duration);
+  }
+
+  /** Undo scheduleFadeOut: back to full level now. */
+  cancelFadeOut(): void {
+    this._resetFade();
+  }
+
+  /** Where Web Audio sources connect: the fade node (made with gainNode in the ctx getter). */
+  private get _sourceOutput(): AudioNode {
+    const out = this._fadeGainNode ?? this.gainNode;
+    if (!out) throw new Error('gapless: no Web Audio output for this track');
+    return out;
+  }
+
+  private _rampFade(curve: Float32Array, at: number, duration: number): void {
+    const gain = this._fadeGainNode?.gain;
+    if (!gain || !this.ctx) return;
+    gain.cancelScheduledValues(0);
+    // setValueCurveAtTime throws if any other event falls strictly inside the
+    // curve, so anchor both at the same time, never in the past.
+    const start = Math.max(at, this.ctx.currentTime);
+    const left = at + duration - start;
+    if (left <= 0) {
+      gain.setValueAtTime(curve[curve.length - 1], start);
+      return;
+    }
+    gain.value = curve[0];
+    gain.setValueCurveAtTime(curve, start, left);
+  }
+
+  private _resetFade(): void {
+    const gain = this._fadeGainNode?.gain;
+    if (!gain || !this.ctx) return;
+    gain.cancelScheduledValues(0);
+    gain.setValueAtTime(1, this.ctx.currentTime);
   }
 
   // --------------------------------------------------------------------------
@@ -896,14 +972,16 @@ export class Track {
     const maxOffset = this._bufferClipLength;
     const effectiveOffset = Math.min(offset + lead * rate, maxOffset);
 
+    // A fresh start (play, seek, resume) ends any crossfade this track was in.
+    this._resetFade();
     if (fadeInSec > 0) {
       const fadeNode = this.ctx.createGain();
       fadeNode.gain.setValueAtTime(0, when);
       fadeNode.gain.linearRampToValueAtTime(1, when + fadeInSec);
       this.sourceNode.connect(fadeNode);
-      fadeNode.connect(this.gainNode);
+      fadeNode.connect(this._sourceOutput);
     } else {
-      this.sourceNode.connect(this.gainNode);
+      this.sourceNode.connect(this._sourceOutput);
     }
     this.sourceNode.onended = this._handleWebAudioEnded;
 

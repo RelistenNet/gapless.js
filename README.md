@@ -66,6 +66,7 @@ const player = new Queue({
   preloadNumTracks: 2, // Number of tracks to preload ahead (0 to disable)
   playbackRate: 1, // Initial playback rate, 0.25–4.0
   repeat: 'off', // 'off' | 'all' | 'one'
+  crossfade: 0, // Default crossfade between tracks, in seconds (0 = gapless)
 });
 ```
 
@@ -85,6 +86,7 @@ const player = new Queue({
 | `addTrack(url, options?)`            | Add a track to the end of the queue                              |
 | `removeTrack(index)`                 | Remove a track by index                                          |
 | `setRepeat(mode)`                    | `'off'`, `'all'` (loop the list) or `'one'` (loop the track)     |
+| `setCrossfade(seconds)`              | Default crossfade for entries without their own; 0 is gapless    |
 | `resumeAudioContext()`               | Resume the AudioContext (for browsers that require user gesture) |
 | `destroy()`                          | Clean up all resources                                           |
 
@@ -103,6 +105,7 @@ const player = new Queue({
 | `keys`              | `string[]`               | Entry keys in play order                       |
 | `currentKey`        | `string \| null`         | Key of the current entry                       |
 | `repeat`            | `RepeatMode`             | Current repeat mode                            |
+| `crossfade`         | `number`                 | Default crossfade, in seconds                  |
 
 ### Editing the queue by key
 
@@ -224,6 +227,20 @@ player.addTrack('https://example.com/set.mp3', { start: 754.2, end: 1131.8 });
 ```
 
 Times the queue reports and accepts (`currentTime`, `duration`, `seek`) are relative to the clip, so a clip behaves like a short track. Consecutive clips, from the same file or from different files, join gaplessly on Web Audio. The whole file is still downloaded and decoded, once: clips of the same file share one decoded buffer, which is freed when the last of them unloads. During HTML5 playback (before the decode finishes) a clip is stopped by polling, so it can run a few milliseconds past `end`.
+
+#### Crossfades
+
+Transitions are gapless by default. Set `crossfade` (seconds) on an entry to fade into it from the entry before, or on the queue as the default for every transition. An entry's own value wins, so `crossfade: 0` keeps one transition gapless under a queue default.
+
+```typescript
+// A playlist of jams: fade between clips from different shows.
+player.setEntries([
+  { key: 'jam-1', url: 'show-a.mp3', start: 754.2, end: 1131.8 },
+  { key: 'jam-2', url: 'show-b.mp3', start: 2210, end: 2694.5, crossfade: 6 },
+]);
+```
+
+The next entry starts `crossfade` seconds before the current one ends, and the two cross on equal-power curves, so the level stays even. The queue moves to the next entry when the current one finishes fading out. The fade is shortened to fit either entry and the time left, and becomes a gapless cut when under 0.1 s is left. Crossfades need both entries decoded: one from a track still playing over HTML5 is a gapless cut instead. Pausing or seeking mid-fade stops the incoming entry; on resume it starts over with a fade over the time left. Skipping to the next entry mid-fade starts it from its beginning.
 
 ### `TrackMetadata`
 
