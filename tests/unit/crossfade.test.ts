@@ -201,3 +201,58 @@ describe('crossfade values', () => {
     ]);
   });
 });
+
+describe('rescheduling during a crossfade', () => {
+  it('reaching the lookahead mid-fade leaves the incoming track alone', async () => {
+    // Regression: at 5 s left the current track reports TRACK_LOADED again,
+    // and cancel-and-reschedule restarted the incoming track from its start,
+    // 3 s into an 8 s fade.
+    const { q, a, b } = await playing(AB, { crossfade: 8 });
+    advanceTime(5); // 3 s into the fade, 5 s left
+    const incoming = sourcesOf(b).at(-1)!;
+    const started = sourcesOf(b).length;
+    q.onTrackBufferReady(a);
+    await flush(2);
+    expect(incoming.stop.mock.calls.filter((c) => c.length === 0)).toHaveLength(0);
+    expect(sourcesOf(b)).toHaveLength(started);
+  });
+
+  it('a seek mid-fade still reschedules', async () => {
+    const { q, a, b } = await playing(AB, { crossfade: 8 });
+    advanceTime(5);
+    const incoming = sourcesOf(b).at(-1)!;
+    q.seek(a.duration - 20);
+    await flush(2);
+    expect(incoming.stop).toHaveBeenCalled();
+    expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime! - 8, 5);
+  });
+});
+
+describe('scheduling lead for long fades', () => {
+  it('a fade longer than the 5 s lookahead is scheduled in time, at full length', async () => {
+    // Regression: with the next track already decoded when the current one
+    // started, nothing scheduled it until 5 s before the end, so every fade
+    // was cut to about 5 s.
+    mockFetchSuccess();
+    const q = new Queue({ crossfade: 8, preloadNumTracks: 2 });
+    q.setEntries([{ key: 'x', url: 'x.mp3' }, ...AB]);
+    q.play();
+    await flush();
+    const [x, a, b] = (q as any)._tracks as Track[];
+    // x runs into a (a fades in), with b already decoded.
+    q.seek(x.duration - 10);
+    await flush(2);
+    advanceTime(10);
+    sourcesOf(x).at(-1)!.simulateEnded();
+    await flush(2);
+    expect(q.currentTrack?.key).toBe('a');
+    expect(a.playbackType).toBe('WEBAUDIO');
+    expect(b.isBufferLoaded).toBe(true);
+    expect(b.scheduledStartContextTime).toBeNull();
+
+    advanceTime(a.playbackEndContextTime! - 12 - (a as any).ctx.currentTime); // 12 s left
+    await flush();
+    const end = a.playbackEndContextTime!;
+    expect(b.scheduledStartContextTime).toBeCloseTo(end - 8, 5);
+  });
+});

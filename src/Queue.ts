@@ -26,6 +26,7 @@ import type {
   TrackInfo,
   TrackMetadata,
   PlaybackMethod,
+  PlaybackType,
 } from './types';
 
 const MAX_SCHEDULE_LOOKAHEAD = 5;
@@ -115,6 +116,12 @@ export class Queue implements TrackQueueRef {
    * not index, so reordering the queue can't make it point at another track.
    */
   private _scheduledNext: Track | null = null;
+  /**
+   * What the scheduled transition was timed against: the current track's end
+   * time and backend, and the fade asked for. A reschedule that would come
+   * out the same keeps it (see _rescheduleGapless).
+   */
+  private _scheduledFor: { endTime: number; type: PlaybackType; want: number } | null = null;
 
   /** @internal Index of the scheduled track (debugging and tests). */
   get _scheduledNextIndex(): number | null {
@@ -259,8 +266,7 @@ export class Queue implements TrackQueueRef {
           this._cancelScheduledGapless();
         },
         cancelAndRescheduleGapless: ({ context }) => {
-          this._cancelScheduledGapless();
-          this._tryScheduleGapless(context.current);
+          this._rescheduleGapless(context.current);
         },
       },
     });
@@ -721,6 +727,11 @@ export class Queue implements TrackQueueRef {
     return this._tracks.indexOf(track);
   }
 
+  crossfadeAfter(track: Track): number {
+    const next = this._scheduleTargetOf(track);
+    return next ? (next.crossfadeIn ?? this._crossfade) : 0;
+  }
+
   onDebug(msg: string): void {
     this._onDebug?.(msg);
   }
@@ -997,6 +1008,32 @@ export class Queue implements TrackQueueRef {
     // A crossfade's fade-out on the current track goes with it.
     cur?.cancelFadeOut();
     this._scheduledNext = null;
+    this._scheduledFor = null;
+  }
+
+  /**
+   * Cancel and redo the scheduled transition, unless redoing it would give the
+   * same one: same next track, same end time, same backend, same fade. A
+   * redundant reschedule isn't harmless mid-crossfade: the incoming track
+   * is already playing, and cancelling restarts it from its beginning.
+   */
+  private _rescheduleGapless(current: Track | null | undefined): void {
+    const next = this._scheduledNext;
+    const was = this._scheduledFor;
+    if (current && next && was && next === this._scheduleTargetOf(current)) {
+      const endTime = this._computeTrackEndTime(current);
+      if (
+        endTime !== null &&
+        Math.abs(endTime - was.endTime) < 0.002 &&
+        current.playbackType === was.type &&
+        (next.crossfadeIn ?? this._crossfade) === was.want
+      ) {
+        this.onDebug(`_rescheduleGapless: ${next.key} unchanged, keeping its schedule`);
+        return;
+      }
+    }
+    this._cancelScheduledGapless();
+    this._tryScheduleGapless(current);
   }
 
   private _tryScheduleGapless(current: Track | null | undefined): void {
@@ -1045,6 +1082,11 @@ export class Queue implements TrackQueueRef {
       `_tryScheduleGapless: scheduled track ${next.key} at ${start.toFixed(3)} endTime=${endTime.toFixed(3)} (in ${(start - ctx.currentTime).toFixed(1)}s) crossfade=${fade.toFixed(2)}s curPlaybackType=${current.playbackType}`
     );
     this._scheduledNext = next;
+    this._scheduledFor = {
+      endTime,
+      type: current.playbackType,
+      want: next.crossfadeIn ?? this._crossfade,
+    };
   }
 
   /**

@@ -31,6 +31,11 @@ export interface TrackQueueRef {
   readonly currentKey: string | null;
   /** This track's position in the queue's play order, or -1 if it isn't in it. */
   indexOf(track: Track): number;
+  /**
+   * Seconds of crossfade into the track after `track`, if it fades in: its
+   * transition must be scheduled that much earlier than a gapless one.
+   */
+  crossfadeAfter?(track: Track): number;
 }
 
 /** How close to the end (in seconds) before we attempt gapless scheduling. */
@@ -1049,11 +1054,12 @@ export class Track {
 
       const remaining = this.duration - this.currentTime;
       const snap = this._actor.getSnapshot();
-      if (
-        !snap.context.notifiedLookahead &&
-        !isNaN(remaining) &&
-        remaining <= GAPLESS_SCHEDULE_LOOKAHEAD
-      ) {
+      // A crossfade starts `fade` seconds before the end, so ask for the
+      // transition that much earlier (in track time, hence the rate).
+      const lead =
+        GAPLESS_SCHEDULE_LOOKAHEAD +
+        (this.queueRef.crossfadeAfter?.(this) ?? 0) * this.queueRef.playbackRate;
+      if (!snap.context.notifiedLookahead && !isNaN(remaining) && remaining <= lead) {
         this._actor.send({ type: 'LOOKAHEAD_REACHED' });
         queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
       }
