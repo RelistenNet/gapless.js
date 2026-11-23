@@ -9,6 +9,7 @@
 
 import { vi, type Mock, beforeEach } from 'vitest';
 import { _resetAudioContext, _setAudioContext } from '../src/utils/audioContext';
+import { _resetBufferCache } from '../src/utils/bufferCache';
 
 // ---------------------------------------------------------------------------
 // Controllable AudioContext clock
@@ -252,6 +253,7 @@ export function mockFetchFailure(): void {
 // ---------------------------------------------------------------------------
 beforeEach(() => {
   resetTime();
+  _resetBufferCache();
 
   // Build a fresh mock AudioContext for this test and inject it directly into
   // the lazy singleton cache. This avoids the `new Ctor()` constructor path

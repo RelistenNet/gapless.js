@@ -223,7 +223,7 @@ Pass `start` and/or `end` (seconds into the file) to play only part of a file. E
 player.addTrack('https://example.com/set.mp3', { start: 754.2, end: 1131.8 });
 ```
 
-Times the queue reports and accepts (`currentTime`, `duration`, `seek`) are relative to the clip, so a clip behaves like a short track. Consecutive clips, from the same file or from different files, join gaplessly on Web Audio. The whole file is still downloaded and decoded, and each clip loads its own copy. During HTML5 playback (before the decode finishes) a clip is stopped by polling, so it can run a few milliseconds past `end`.
+Times the queue reports and accepts (`currentTime`, `duration`, `seek`) are relative to the clip, so a clip behaves like a short track. Consecutive clips, from the same file or from different files, join gaplessly on Web Audio. The whole file is still downloaded and decoded, once: clips of the same file share one decoded buffer, which is freed when the last of them unloads. During HTML5 playback (before the decode finishes) a clip is stopped by polling, so it can run a few milliseconds past `end`.
 
 ### `TrackMetadata`
 
