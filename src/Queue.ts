@@ -172,7 +172,7 @@ export class Queue implements TrackQueueRef {
       playbackMethod = 'HYBRID',
       trackMetadata = [],
       volume: initialVolume = 1,
-      preloadNumTracks = 2,
+      preloadNumTracks = 1,
       playbackRate: initialPlaybackRate = 1,
       repeat = 'off',
       crossfade = 0,

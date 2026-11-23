@@ -62,9 +62,9 @@ function makeCtx(overrides: Partial<TrackContext> = {}): TrackContext {
 // ---------------------------------------------------------------------------
 
 describe('preloadNumTracks', () => {
-  it('defaults to 2', () => {
+  it('defaults to 1: the next track, all gapless playback needs', () => {
     const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'] });
-    expect(q.preloadNumTracks).toBe(2);
+    expect(q.preloadNumTracks).toBe(1);
   });
 
   it('accepts custom preloadNumTracks via options', () => {

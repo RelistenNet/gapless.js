@@ -63,7 +63,7 @@ const player = new Queue({
   playbackMethod: 'HYBRID', // 'HYBRID' | 'HTML5_ONLY' | 'WEBAUDIO_ONLY'
   trackMetadata: [], // Per-track metadata (aligned by index)
   volume: 1, // Initial volume, 0.0–1.0
-  preloadNumTracks: 2, // Number of tracks to preload ahead (0 to disable)
+  preloadNumTracks: 1, // Number of tracks to preload ahead (0 to disable)
   playbackRate: 1, // Initial playback rate, 0.25–4.0
   repeat: 'off', // 'off' | 'all' | 'one'
   crossfade: 0, // Default crossfade between tracks, in seconds (0 = gapless)
@@ -282,12 +282,12 @@ player.play(); // Waits for decode, then plays via Web Audio
 
 ## Preload Count
 
-Control how many tracks are preloaded ahead of the current track:
+Control how many tracks are preloaded ahead of the current track. The default, 1, is the next track: all gapless playback needs. Each preloaded track holds its decoded audio, about 23 MB per minute of audio, so raise it only to ride out a flaky connection.
 
 ```javascript
 const player = new Queue({
   tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'],
-  preloadNumTracks: 1, // Only preload 1 track ahead (default: 2)
+  preloadNumTracks: 2, // Preload 2 tracks ahead (default: 1)
 });
 
 // Can also be changed at runtime:
