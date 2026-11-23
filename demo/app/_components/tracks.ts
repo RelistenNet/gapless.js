@@ -28,6 +28,19 @@ export const SET_ONE: DemoTrack[] = [
   track('gd77-05-08.s1t11.mp3', 'Row Jimmy'),
 ];
 
+/**
+ * The crossfade demo: 15 seconds from three minutes into three different
+ * songs (the set's longest, all 7 minutes or more), so a hard cut between
+ * them is obvious and a fade is easy to hear.
+ */
+export const JAM_SECONDS = 15;
+const JAM_START = 180;
+export const JAMS: DemoTrack[] = [SET_ONE[1], SET_ONE[5], SET_ONE[3]].map((t) => ({
+  ...t,
+  start: JAM_START,
+  end: JAM_START + JAM_SECONDS,
+}));
+
 export function formatTime(seconds: number | undefined): string {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return '–:––';
   const s = Math.floor(seconds);
