@@ -4,6 +4,7 @@
 
 import { createActor, fromPromise, assign } from 'xstate';
 import { getAudioContext, resumeAudioContext } from './utils/audioContext';
+import { acquireBuffer, hasBuffer, releaseBuffer } from './utils/bufferCache';
 import { createTrackMachine } from './machines/track.machine';
 import { fetchDecodeMachine } from './machines/fetchDecode.machine';
 import type { TrackContext } from './machines/track.machine';
@@ -89,8 +90,8 @@ export class Track {
   private _trackUrl: string;
   private _resolvedUrl: string;
   readonly skipHEAD: boolean;
-  /** Temporary holder between fetch and decode steps (unserializable — stays on Track class). */
-  private _pendingArrayBuffer: ArrayBuffer | null = null;
+  /** Holds the shared buffer between the machine's fetch and decode steps. */
+  private _pendingBuffer: AudioBuffer | null = null;
   /** Bumped by unload(): a fetch or decode that finishes after it is dropped. */
   private _loadGeneration = 0;
 
@@ -262,6 +263,9 @@ export class Track {
         fetchDecode: fetchDecodeMachine.provide({
           actors: {
             resolveUrl: fromPromise(async ({ signal }) => {
+              // Another track already loads this file: its buffer is shared
+              // by source URL, so the redirect needn't be resolved again.
+              if (hasBuffer(this._trackUrl)) return null;
               const res = await fetch(this._trackUrl, { method: 'HEAD', signal });
               if (res.redirected && res.url) {
                 // Cache the resolved URL so the WebAudio GET below uses it
@@ -280,23 +284,23 @@ export class Track {
               }
               return null;
             }),
+            // Fetch and decode, shared by every track playing this file
+            // (clips of one recording): the first one loads it, the rest
+            // wait on the same promise. See utils/bufferCache.
             fetchAudio: fromPromise(async ({ input, signal }) => {
               const { resolvedUrl } = input as { resolvedUrl: string };
               const generation = this._loadGeneration;
-              const res = await fetch(resolvedUrl, { signal });
-              if (!res.ok) throw new Error(`HTTP ${res.status} for ${resolvedUrl}`);
-              const bytes = await res.arrayBuffer();
-              if (generation === this._loadGeneration) this._pendingArrayBuffer = bytes;
+              const decoded = await acquireBuffer(this._trackUrl, this, signal, (sig) =>
+                this._fetchAndDecode(resolvedUrl, sig)
+              );
+              // Unloaded meanwhile (a decode can't be aborted): drop the result.
+              if (generation === this._loadGeneration) this._pendingBuffer = decoded;
             }),
             decodeAudio: fromPromise(async () => {
-              const buf = this._pendingArrayBuffer;
-              this._pendingArrayBuffer = null;
-              if (!buf || !this.ctx) throw new Error('No ArrayBuffer or AudioContext');
-              const generation = this._loadGeneration;
-              const decoded = await this.ctx.decodeAudioData(buf);
-              // Unloaded mid-decode (which can't be aborted): drop the result.
-              if (generation !== this._loadGeneration) return;
-              this.audioBuffer = decoded;
+              const buf = this._pendingBuffer;
+              this._pendingBuffer = null;
+              if (!buf) return;
+              this.audioBuffer = buf;
               this._maybeComputeBufferAlignment();
             }),
           },
@@ -498,7 +502,7 @@ export class Track {
 
   destroy(): void {
     this.deactivate();
-    this._pendingArrayBuffer = null;
+    this._dropPendingDecode();
     this.audioBuffer = null;
     this.gainNode?.disconnect();
     this.gainNode = null;
@@ -697,10 +701,26 @@ export class Track {
     }
   }
 
-  /** A fetch or decode that finishes from now on is dropped (see unload()). */
+  /**
+   * A fetch or decode that finishes from now on is dropped (see unload()),
+   * and this track lets go of the shared buffer: the file's last holder out
+   * frees it, or aborts its download.
+   */
   private _dropPendingDecode(): void {
     this._loadGeneration++;
-    this._pendingArrayBuffer = null;
+    this._pendingBuffer = null;
+    releaseBuffer(this._trackUrl, this);
+  }
+
+  private async _fetchAndDecode(url: string, signal: AbortSignal): Promise<AudioBuffer> {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+    const bytes = await res.arrayBuffer();
+    // The shared context, not this.ctx: the load outlives this track when
+    // others share it, and this.ctx would rebuild a destroyed track's nodes.
+    const ctx = getAudioContext();
+    if (!ctx) throw new Error('No AudioContext');
+    return ctx.decodeAudioData(bytes);
   }
 
   /**
