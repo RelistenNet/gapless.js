@@ -46,6 +46,8 @@ const GAPLESS_SCHEDULE_LOOKAHEAD = 5;
  * Wider than the ~250 ms between timeupdate events, so it always arms.
  */
 const CLIP_END_ARM_SEC = 0.6;
+/** How far the predicted clip end can move before the armed mute is re-aimed. */
+const CLIP_END_DRIFT_SEC = 0.03;
 
 /** How many seconds into HTML5 playback before we preload the next track. */
 const PRELOAD_DELAY = 15;
@@ -109,8 +111,8 @@ export class Track {
   /** Seconds to crossfade into this track, or null to use the queue's default. */
   private _crossfadeIn: number | null;
   private _destroyed = false;
-  /** The HTML5 clip-end mute is scheduled (cleared by cancelHtml5Mute). */
-  private _clipEndMuteArmed = false;
+  /** When the HTML5 clip-end mute is set for (AudioContext time), or null (see cancelHtml5Mute). */
+  private _clipEndMuteAt: number | null = null;
 
   private _trackUrl: string;
   private _resolvedUrl: string;
@@ -286,6 +288,13 @@ export class Track {
     // background tabs (where rAF doesn't run).
     if (this.clipEnd !== null) {
       this.audio.ontimeupdate = () => this._checkHtml5ClipEnd();
+      // Stalled to buffer: the element's clock stops and any clip-end mute
+      // would land early. Drop it; the next check re-arms it from where the
+      // element really is. (In a background tab timeupdate also stops during
+      // a stall, so re-aiming on each check alone wouldn't catch this.)
+      this.audio.onwaiting = () => {
+        if (this._clipEndMuteAt !== null) this.cancelHtml5Mute();
+      };
     }
 
     this._playbackMethod = opts.queue.playbackMethod;
@@ -579,7 +588,7 @@ export class Track {
   }
 
   cancelHtml5Mute(): void {
-    this._clipEndMuteArmed = false;
+    this._clipEndMuteAt = null;
     if (!this._html5GainNode || !this.ctx) return;
     this._html5GainNode.gain.cancelScheduledValues(this.ctx.currentTime);
     this._html5GainNode.gain.setValueAtTime(1, this.ctx.currentTime);
@@ -1229,9 +1238,22 @@ export class Track {
       // element exactly at clipEnd on the AudioContext clock. A seek, a
       // fresh start or a rate change puts the gain back (cancelHtml5Mute).
       const left = (this.clipEnd - this.audio.currentTime) / (this.audio.playbackRate || 1);
-      if (left < CLIP_END_ARM_SEC && !this._clipEndMuteArmed && this._html5GainNode && this.ctx) {
-        this._clipEndMuteArmed = true;
-        this._html5GainNode.gain.setValueAtTime(0, this.ctx.currentTime + left);
+      if (left < CLIP_END_ARM_SEC && this._html5GainNode && this.ctx) {
+        const now = this.ctx.currentTime;
+        const at = now + left;
+        const armed = this._clipEndMuteAt;
+        // Arm once; re-aim when the predicted end moves, as it does when the
+        // element stalls to buffer while the AudioContext clock runs on (a
+        // mute aimed at the old end would cut off the rest of the clip).
+        if (armed === null || Math.abs(at - armed) > CLIP_END_DRIFT_SEC) {
+          const gain = this._html5GainNode.gain;
+          if (armed !== null) {
+            gain.cancelScheduledValues(now);
+            gain.setValueAtTime(1, now);
+          }
+          this._clipEndMuteAt = at;
+          gain.setValueAtTime(0, at);
+        }
       }
       return false;
     }
