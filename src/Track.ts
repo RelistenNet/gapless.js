@@ -776,12 +776,21 @@ export class Track {
       return;
     }
 
+    // The element keeps playing through the start lead and the fade, and once
+    // the machine is in webaudio nothing polls for the clip end. So a clip
+    // whose end falls inside that window must silence the element there.
+    const clipEndCtx = this._html5ClipEndContextTime();
     const when = this._startSourceNode(this._crossoverComputedOffset, CROSSOVER_FADE_SEC);
 
     if (when !== null && this._html5GainNode) {
-      this._html5GainNode.gain.cancelScheduledValues(when);
-      this._html5GainNode.gain.setValueAtTime(1, when);
-      this._html5GainNode.gain.linearRampToValueAtTime(0, when + CROSSOVER_FADE_SEC);
+      const now = this.ctx.currentTime;
+      const fadeEnd = when + CROSSOVER_FADE_SEC;
+      // Without a clip end in the way this is the plain fade: 1 at `when`, 0 at fadeEnd.
+      const muteBy = clipEndCtx === null ? fadeEnd : Math.max(now, Math.min(fadeEnd, clipEndCtx));
+      const rampFrom = Math.max(now, Math.min(when, muteBy - 0.005));
+      this._html5GainNode.gain.cancelScheduledValues(rampFrom);
+      this._html5GainNode.gain.setValueAtTime(1, rampFrom);
+      this._html5GainNode.gain.linearRampToValueAtTime(0, muteBy);
       const ctxRef = this.ctx;
       const html5GainRef = this._html5GainNode;
       const delayMs = (when - this.ctx.currentTime + CROSSOVER_FADE_SEC) * 1000 + 5;
@@ -794,7 +803,8 @@ export class Track {
       }, delayMs);
     } else if (!this._html5GainNode) {
       if (when !== null && this.ctx) {
-        const delayMs = (when - this.ctx.currentTime) * 1000;
+        const stopAt = clipEndCtx === null ? when : Math.min(when, clipEndCtx);
+        const delayMs = (stopAt - this.ctx.currentTime) * 1000;
         setTimeout(
           () => {
             this.audio.volume = 0;
@@ -813,6 +823,13 @@ export class Track {
     this.queueRef.onDebug(
       `crossoverHtml5ToWebAudio track=${this.key} offset=${this._crossoverComputedOffset.toFixed(3)} wasPlaying=true fade=${CROSSOVER_FADE_SEC}s mediaSource=${!!this._html5GainNode} when=${when?.toFixed(3) ?? 'null'}`
     );
+  }
+
+  /** AudioContext time at which the HTML5 element reaches clipEnd, or null without one. */
+  private _html5ClipEndContextTime(): number | null {
+    if (this.clipEnd === null || !this.ctx) return null;
+    const rate = this.audio.playbackRate || 1;
+    return this.ctx.currentTime + Math.max(0, this.clipEnd - this.audio.currentTime) / rate;
   }
 
   /**

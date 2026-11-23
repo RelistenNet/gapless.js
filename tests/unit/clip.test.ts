@@ -182,6 +182,51 @@ describe('clip on HTML5', () => {
   });
 });
 
+describe('clip end during the HTML5 → Web Audio handoff', () => {
+  // The element plays on through the start lead and the 30 ms fade. When the
+  // clip ends inside that window, its gain must reach 0 by the clip end.
+  async function handoffAt(audioTime: number, clip: { start?: number; end?: number }) {
+    mockFetchSuccess();
+    const q = new Queue();
+    q.addTrack('a.mp3', clip);
+    q.play();
+    const t = (q as any)._tracks[0] as Track;
+    (t.audio as unknown as MockAudioElement).currentTime = audioTime;
+    await flush();
+    expect(t.playbackType).toBe('WEBAUDIO');
+    const gain = (t as any)._html5GainNode.gain;
+    const ramps = gain.linearRampToValueAtTime.mock.calls as [number, number][];
+    return { q, t, ramp: ramps[ramps.length - 1] };
+  }
+
+  it('mutes the element at the clip end when it falls inside the fade', async () => {
+    const { ramp } = await handoffAt(74.99, { start: 30, end: 75 });
+    expect(ramp[0]).toBe(0);
+    expect(ramp[1]).toBeCloseTo(0.01, 5); // clip end, before when + fade (0.05)
+  });
+
+  it('mutes at once when the element is already past the clip end', async () => {
+    const { ramp } = await handoffAt(75.2, { start: 30, end: 75 });
+    expect(ramp[1]).toBeCloseTo(0, 5);
+  });
+
+  it('keeps the normal fade when the clip end is farther away', async () => {
+    const { t, ramp } = await handoffAt(40, { start: 30, end: 75 });
+    const [when] = startedSources(t)[0].start.mock.calls[0] as [number];
+    expect(ramp[1]).toBeCloseTo(when + 0.03, 5);
+  });
+
+  it('reports the track ended once', async () => {
+    const { q, t } = await handoffAt(74.99, { start: 30, end: 75 });
+    const onEnded = vi.spyOn(q, 'onTrackEnded');
+    startedSources(t)[0].simulateEnded();
+    (t.audio as unknown as MockAudioElement).currentTime = 75.05;
+    (t.audio as any).ontimeupdate();
+    await flush(2);
+    expect(onEnded).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('clips in the queue', () => {
   it('schedules the next clip gaplessly at the current clip end', async () => {
     mockFetchSuccess();
