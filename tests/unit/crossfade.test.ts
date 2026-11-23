@@ -845,3 +845,25 @@ describe('no buffering further ahead after a gapless start', () => {
     expect(el(c).preload).toBe('none');
   });
 });
+
+describe('early buffering respects preloadNumTracks: 0', () => {
+  it('does not buffer the next entry ahead; the transition still primes it when near', async () => {
+    fetchHanging('b.mp3');
+    const q = new Queue({ crossfade: 4, preloadNumTracks: 0 });
+    q.setEntries(AB);
+    q.play();
+    await flush();
+    const [a, b] = (q as any)._tracks as Track[];
+    (q as any)._preloadAhead(a);
+    (q as any)._preloadAhead(a);
+    expect(el(b).load).not.toHaveBeenCalled(); // not primed (nor primed and released)
+    expect(el(b).preload).toBe('none');
+
+    // Near the transition, the scheduled streaming start still primes it.
+    advanceTime(a.playbackEndContextTime! - 8 - (a as any).ctx.currentTime);
+    q.onTrackBufferReady(a);
+    await flush(2);
+    expect(b.hasScheduledStart).toBe(true);
+    expect(el(b).preload).toBe('auto');
+  });
+});

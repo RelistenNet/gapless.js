@@ -1273,6 +1273,10 @@ export class Queue implements TrackQueueRef {
    * start its element buffering from the clip start now.
    */
   private _primeStreamingFadeAfter(track: Track): void {
+    // Buffering ahead is preloading: not when it's switched off (and the
+    // window would release the element straight away, restarting it next
+    // pass). The scheduled start still primes it when the fade is near.
+    if (this._preloadNumTracks < 1) return;
     const next = this._scheduleTargetOf(track);
     if (
       next &&
