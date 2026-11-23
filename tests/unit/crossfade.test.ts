@@ -748,3 +748,80 @@ describe('a track with no end (a live stream)', () => {
     expect(b.hasScheduledStart).toBe(false);
   });
 });
+
+describe('buffering the clip start of a streaming incoming track', () => {
+  it('a reschedule does not restart its download', async () => {
+    fetchHanging('b.mp3');
+    const { q, a, b } = await playingUndecodedNext();
+    advanceTime(a.playbackEndContextTime! - 8 - (a as any).ctx.currentTime);
+    q.onTrackBufferReady(a);
+    await flush(2);
+    expect(b.hasScheduledStart).toBe(true);
+    const loads = el(b).load.mock.calls.length;
+    q.setCrossfade(3); // cancels and reschedules the pending start
+    await flush(2);
+    expect(b.hasScheduledStart).toBe(true);
+    expect(el(b).load.mock.calls.length).toBe(loads);
+  });
+
+  it('starts as soon as the track is next, long before its fade', async () => {
+    fetchHanging('b.mp3');
+    const { a, b } = await playingUndecodedNext();
+    // ~180 s before the fade: nothing is scheduled yet, but b is buffering.
+    expect(b.hasScheduledStart).toBe(false);
+    expect(a.playbackEndContextTime! - (a as any).ctx.currentTime).toBeGreaterThan(100);
+    expect(el(b).preload).toBe('auto');
+    expect(el(b).load).toHaveBeenCalled();
+  });
+
+  it('stops when the track leaves the preload window', async () => {
+    fetchHanging('b.mp3');
+    const { q, b } = await playingUndecodedNext();
+    expect(el(b).preload).toBe('auto');
+    q.setEntries([AB[0]]); // b is gone
+    expect(el(b).preload).toBe('none');
+  });
+
+  it('is not done when the transition into it will not fade', async () => {
+    fetchHanging('b.mp3');
+    const q = new Queue(); // crossfade 0
+    q.setEntries(AB);
+    q.play();
+    await flush();
+    const [, b] = (q as any)._tracks as Track[];
+    expect(el(b).preload).toBe('none');
+  });
+});
+
+describe('decode downloads', () => {
+  it('go out at low priority, so playing elements get the bandwidth first', async () => {
+    const spy = mockFetchSuccess();
+    const q = new Queue();
+    q.setEntries(AB);
+    q.play();
+    await flush();
+    const gets = spy.mock.calls.filter((c) => (c[1] as RequestInit | undefined)?.method !== 'HEAD');
+    expect(gets.length).toBeGreaterThan(0);
+    for (const c of gets) expect((c[1] as RequestInit).priority).toBe('low');
+  });
+});
+
+describe('buffering one further ahead during a transition', () => {
+  it('once a fade into b is scheduled, c (fading into after b) starts buffering and stays loaded', async () => {
+    fetchHanging('b.mp3', 'c.mp3');
+    const q = new Queue({ crossfade: 4 });
+    q.setEntries([...AB, { key: 'c', url: 'c.mp3' }]);
+    q.play();
+    await flush();
+    const [a, b, c] = (q as any)._tracks as Track[];
+    expect(a.playbackType).toBe('WEBAUDIO');
+    expect(el(c).preload).toBe('none'); // c is two ahead: not yet
+    advanceTime(a.playbackEndContextTime! - 8 - (a as any).ctx.currentTime);
+    q.onTrackBufferReady(a); // schedules the fade into b
+    await flush(2);
+    expect(b.hasScheduledStart).toBe(true);
+    expect(el(c).preload).toBe('auto');
+    (q as any)._preloadAhead(a); // a later window pass must not release c
+    expect(el(c).preload).toBe('auto');
+  });
+});
