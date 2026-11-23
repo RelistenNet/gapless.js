@@ -30,6 +30,8 @@ export interface GaplessSnapshot {
   playbackRate: number;
   logs: readonly LogEntry[];
   lastHandoff: Handoff | null;
+  /** Whether each natural handoff out of a track index was gapless, the last time it ran. */
+  handoffs: Readonly<Record<number, boolean>>;
 }
 
 const MAX_LOGS = 300;
@@ -66,6 +68,7 @@ class GaplessStore {
       playbackRate: 1,
       logs: [],
       lastHandoff: null,
+      handoffs: {},
     };
     this.snapshot = this.initial;
   }
@@ -81,9 +84,11 @@ class GaplessStore {
   getServerSnapshot = () => this.initial;
 
   connect(): () => void {
+    // A list with clip ranges goes in as entries: the constructor takes plain URLs.
+    const clipped = this.list.some((t) => t.start !== undefined || t.end !== undefined);
     const queue = new Queue({
-      tracks: this.list.map((t) => t.url),
-      trackMetadata: this.list.map((t) => ({ title: t.title })),
+      tracks: clipped ? [] : this.list.map((t) => t.url),
+      trackMetadata: clipped ? [] : this.list.map((t) => ({ title: t.title })),
       volume: this.snapshot.volume,
       onProgress: (info) => {
         this.lastProgress.set(info.index, info);
@@ -97,6 +102,17 @@ class GaplessStore {
       onPlayBlocked: () =>
         this.sync({ state: 'paused' }, 'Autoplay was blocked. Press play to start.', 'error'),
     });
+    if (clipped) {
+      queue.setEntries(
+        this.list.map((t, i) => ({
+          key: `${this.id}-${i}`,
+          url: t.url,
+          metadata: { title: t.title },
+          start: t.start,
+          end: t.end,
+        }))
+      );
+    }
     this.queue = queue;
     this.sync();
 
@@ -156,7 +172,10 @@ class GaplessStore {
     }
     const gapless = info.playbackType === 'WEBAUDIO';
     this.sync(
-      { lastHandoff: { from: prev.index, to: info.index, gapless } },
+      {
+        lastHandoff: { from: prev.index, to: info.index, gapless },
+        handoffs: { ...this.snapshot.handoffs, [prev.index]: gapless },
+      },
       gapless
         ? `Gapless handoff → "${info.metadata?.title}" started on the Web Audio clock`
         : `Handoff → "${info.metadata?.title}" fell back to HTML5 (next buffer not decoded yet)`
