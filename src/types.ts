@@ -77,6 +77,14 @@ export interface AddTrackOptions {
   metadata?: TrackMetadata;
   /** Stable identity for key-based edits. Generated when omitted. */
   key?: string;
+  /** Seconds into the file to start playing from. Defaults to 0. */
+  start?: number;
+  /**
+   * Seconds into the file to stop at. Defaults to the end of the file.
+   * Times the queue reports (currentTime, duration, seek) are relative to the
+   * clip: 0 is `start`. The whole file is still downloaded and decoded.
+   */
+  end?: number;
 }
 
 /** What happens at the end of a track: stop at the end, loop the list, or loop the track. */
@@ -86,7 +94,7 @@ export type RepeatMode = 'off' | 'all' | 'one';
 export interface QueueSnapshot {
   entries: Entry[];
   currentKey: string | null;
-  /** Seconds into the current entry. */
+  /** Seconds into the current entry (relative to its clip start). */
   currentTime: number;
   repeat: RepeatMode;
 }
@@ -104,6 +112,14 @@ export interface Entry {
   url: string;
   metadata?: TrackMetadata;
   skipHEAD?: boolean;
+  /** Seconds into the file to start playing from. Defaults to 0. */
+  start?: number;
+  /**
+   * Seconds into the file to stop at. Defaults to the end of the file.
+   * Times the queue reports (currentTime, duration, seek) are relative to the
+   * clip: 0 is `start`. The whole file is still downloaded and decoded.
+   */
+  end?: number;
 }
 
 /** Where to place inserted or moved entries. */

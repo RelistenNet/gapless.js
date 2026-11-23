@@ -13,6 +13,22 @@ export const CLIPS: DemoTrack[] = [
   { url: '/clips/part-2.wav', title: 'Fire on the Mountain' },
 ];
 
+/**
+ * The clips demo: the same two files cut into four ranges, played as four
+ * queue entries. The music still runs straight through, so each cut (two
+ * inside a file, one across the files) would be audible as a gap.
+ */
+export const CUT_SECONDS = CLIP_SECONDS / 2;
+
+export const CUTS: DemoTrack[] = CLIPS.flatMap((clip) =>
+  [0, 1].map((half) => ({
+    url: clip.url,
+    title: `${clip.url.split('/').pop()} ${half * CUT_SECONDS}–${(half + 1) * CUT_SECONDS}s`,
+    start: half * CUT_SECONDS,
+    end: (half + 1) * CUT_SECONDS,
+  }))
+);
+
 /** Normalized peak amplitude, 64 buckets per clip. */
 export const PEAKS: number[][] = [
   [

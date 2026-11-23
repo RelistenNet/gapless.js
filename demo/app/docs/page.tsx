@@ -324,6 +324,10 @@ player.addTrack('https://example.com/encore.mp3', {
   skipHEAD: true,
   metadata: { title: 'Ripple', artist: 'Grateful Dead' },
 });
+
+// Play only part of a file: start/end are seconds into it. Reported times
+// (currentTime, duration, seek) are relative to the clip.
+player.addTrack('https://example.com/set.mp3', { start: 754.2, end: 1131.8 });
 `}</CodeBlock>
           </Section>
 

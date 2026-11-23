@@ -50,10 +50,41 @@ const CROSSOVER_FADE_SEC = 0.03;
 
 let _autoKey = 0;
 
+/**
+ * Check a clip range (seconds into the file). Throws on a range that can't
+ * play; returns it normalized (start defaults to 0, end to null = file end).
+ */
+export function normalizeClip(
+  start: number | undefined,
+  end: number | undefined
+): { start: number; end: number | null } {
+  const s = start ?? 0;
+  if (!Number.isFinite(s) || s < 0) {
+    throw new Error(`gapless: clip start must be a finite number >= 0 (got ${start})`);
+  }
+  if (end === undefined || end === null) return { start: s, end: null };
+  if (!Number.isFinite(end) || end <= s) {
+    throw new Error(
+      `gapless: clip end must be a finite number > start (got start=${s}, end=${end})`
+    );
+  }
+  return { start: s, end };
+}
+
 export class Track {
   /** Stable identity across reorders. A track's position belongs to the queue. */
   readonly key: string;
   readonly metadata: TrackMetadata;
+  /**
+   * Clip range, in seconds into the file. Every time this class reports or
+   * accepts (currentTime, duration, seek, seekTarget, _waRefTrackTime) is
+   * clip-relative; file time is clipStart + that. The conversion happens only
+   * where we talk to the element (audio.currentTime) or the buffer
+   * (source.start offset).
+   */
+  readonly clipStart: number;
+  /** End of the clip in file seconds, or null to play to the end of the file. */
+  readonly clipEnd: number | null;
 
   private _trackUrl: string;
   private _resolvedUrl: string;
@@ -153,7 +184,14 @@ export class Track {
     key?: string;
     skipHEAD?: boolean;
     metadata?: TrackMetadata;
+    /** Seconds into the file to start playing from. */
+    start?: number;
+    /** Seconds into the file to stop at. */
+    end?: number;
   }) {
+    const clip = normalizeClip(opts.start, opts.end);
+    this.clipStart = clip.start;
+    this.clipEnd = clip.end;
     // Queue always passes a key; this fallback is for a Track built on its own.
     this.key = opts.key ?? `track-${++_autoKey}`;
     this._trackUrl = opts.trackUrl;
@@ -193,6 +231,12 @@ export class Track {
       );
       this._actor.send({ type: 'HTML5_ENDED' });
     };
+    // The element has no exact stop time, so a clip ending before the file
+    // does is ended by polling: the rAF progress loop, plus timeupdate for
+    // background tabs (where rAF doesn't run).
+    if (this.clipEnd !== null) {
+      this.audio.ontimeupdate = () => this._checkHtml5ClipEnd();
+    }
 
     this._playbackMethod = opts.queue.playbackMethod;
 
@@ -283,12 +327,12 @@ export class Track {
           this.sourceNode.playbackRate.value = this.queueRef.playbackRate;
           this.sourceNode.connect(this.gainNode);
           this.sourceNode.onended = this._handleWebAudioEnded;
-          this.sourceNode.start(when, this._bufferStartPaddingSec);
-          const bufRemaining = this.audioBuffer.duration - this._bufferStartPaddingSec;
+          this.sourceNode.start(when, this._bufferStartPaddingSec + this.clipStart);
+          const bufRemaining = this._bufferClipLength;
           const schedRate = this.sourceNode.playbackRate.value || 1;
-          if (bufRemaining > 0) {
-            this.sourceNode.stop(when + bufRemaining / schedRate);
-          }
+          // Always stop: a clip ends before its file, so an unstopped source
+          // would play on past clipEnd. Zero remaining stops it on start.
+          this.sourceNode.stop(when + Math.max(0, bufRemaining) / schedRate);
           this._waRefCtxTime = when;
           this._waRefTrackTime = 0;
           this.queueRef.onDebug(
@@ -315,7 +359,7 @@ export class Track {
         resetHtml5Element: () => {
           this._seekAbort.abort();
           this._seekAbort = new AbortController();
-          this.audio.currentTime = 0;
+          this.audio.currentTime = this.clipStart;
         },
         releaseHtml5Element: () => this._releaseHtml5Element(),
         dropPendingDecode: () => this._dropPendingDecode(),
@@ -383,14 +427,11 @@ export class Track {
     if (this.sourceNode) {
       this.sourceNode.playbackRate.value = rate;
       if (this.audioBuffer && this.ctx) {
-        const remaining =
-          this.audioBuffer.duration - this._bufferStartPaddingSec - this._waRefTrackTime;
-        if (remaining > 0) {
-          try {
-            this.sourceNode.stop(this._waRefCtxTime + remaining / rate);
-          } catch {
-            /* already stopped */
-          }
+        const remaining = this._bufferClipLength - this._waRefTrackTime;
+        try {
+          this.sourceNode.stop(this._waRefCtxTime + Math.max(0, remaining) / rate);
+        } catch {
+          /* already stopped */
         }
       }
     }
@@ -516,16 +557,37 @@ export class Track {
     if ((snap.value === 'idle' || snap.value === 'loading') && snap.context.seekTarget > 0) {
       return snap.context.seekTarget;
     }
-    return this.audio.currentTime;
+    // Before the element has seeked to clipStart it reads below it; past
+    // clipEnd it can read a frame beyond it until the clip-end check stops it.
+    const t = Math.max(0, this.audio.currentTime - this.clipStart);
+    const dur = this.duration;
+    return isNaN(dur) ? t : Math.min(t, dur);
   }
 
+  /** Clip length in seconds. Known up front for a clip with an end; else NaN until loaded. */
   get duration(): number {
+    const file = this._fileDuration;
+    if (this.clipEnd === null) return Math.max(0, file - this.clipStart);
+    const end = isNaN(file) ? this.clipEnd : Math.min(this.clipEnd, file);
+    return Math.max(0, end - this.clipStart);
+  }
+
+  /** The whole file's duration, from whichever backend knows it. */
+  private get _fileDuration(): number {
     const snap = this._actor.getSnapshot();
     if (snap.value === 'html5' && !isNaN(this.audio.duration)) {
       return this.audio.duration;
     }
     if (this.audioBuffer) return this.audioBuffer.duration;
     return this.audio.duration;
+  }
+
+  /** Playable length of the clip within the decoded buffer (music time). */
+  private get _bufferClipLength(): number {
+    if (!this.audioBuffer) return 0;
+    const bufEnd = this.audioBuffer.duration - this._bufferStartPaddingSec;
+    const end = this.clipEnd === null ? bufEnd : Math.min(this.clipEnd, bufEnd);
+    return Math.max(0, end - this.clipStart);
   }
 
   get isPaused(): boolean {
@@ -572,8 +634,7 @@ export class Track {
     if (snap.value !== 'webaudio' || !snap.context.isPlaying) return null;
     if (!this.sourceNode || !this.audioBuffer) return null;
     const rate = this.sourceNode.playbackRate.value || 1;
-    const bufferRemaining =
-      this.audioBuffer.duration - this._bufferStartPaddingSec - this._waRefTrackTime;
+    const bufferRemaining = this._bufferClipLength - this._waRefTrackTime;
     return this._waRefCtxTime + bufferRemaining / rate;
   }
 
@@ -606,11 +667,11 @@ export class Track {
   private _playHtml5(seekTarget: number): void {
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
     this.audio.playbackRate = this.queueRef.playbackRate;
-    if (seekTarget > 0 && Math.abs(this.audio.currentTime - seekTarget) > 0.01) {
+    const target = this.clipStart + seekTarget;
+    if (target > 0 && Math.abs(this.audio.currentTime - target) > 0.01) {
       if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-        this.audio.currentTime = seekTarget;
+        this.audio.currentTime = target;
       } else {
-        const target = seekTarget;
         this.audio.addEventListener(
           'loadedmetadata',
           () => {
@@ -657,8 +718,9 @@ export class Track {
     this.audio.src = this._trackUrl;
   }
 
-  private _seekHtml5(target: number): void {
-    if (!isFinite(target)) return;
+  private _seekHtml5(clipTime: number): void {
+    if (!isFinite(clipTime)) return;
+    const target = this.clipStart + clipTime;
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
     if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
       this.audio.currentTime = target;
@@ -702,7 +764,7 @@ export class Track {
   private _crossoverHtml5ToWebAudio(wasPlaying: boolean, seekTarget: number): void {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return;
 
-    const htmlTime = this.audio.currentTime;
+    const htmlTime = Math.max(0, this.audio.currentTime - this.clipStart);
     const offset = isFinite(seekTarget) && seekTarget > htmlTime ? seekTarget : htmlTime;
     this._crossoverComputedOffset = isFinite(offset) ? offset : 0;
 
@@ -714,12 +776,21 @@ export class Track {
       return;
     }
 
+    // The element keeps playing through the start lead and the fade, and once
+    // the machine is in webaudio nothing polls for the clip end. So a clip
+    // whose end falls inside that window must silence the element there.
+    const clipEndCtx = this._html5ClipEndContextTime();
     const when = this._startSourceNode(this._crossoverComputedOffset, CROSSOVER_FADE_SEC);
 
     if (when !== null && this._html5GainNode) {
-      this._html5GainNode.gain.cancelScheduledValues(when);
-      this._html5GainNode.gain.setValueAtTime(1, when);
-      this._html5GainNode.gain.linearRampToValueAtTime(0, when + CROSSOVER_FADE_SEC);
+      const now = this.ctx.currentTime;
+      const fadeEnd = when + CROSSOVER_FADE_SEC;
+      // Without a clip end in the way this is the plain fade: 1 at `when`, 0 at fadeEnd.
+      const muteBy = clipEndCtx === null ? fadeEnd : Math.max(now, Math.min(fadeEnd, clipEndCtx));
+      const rampFrom = Math.max(now, Math.min(when, muteBy - 0.005));
+      this._html5GainNode.gain.cancelScheduledValues(rampFrom);
+      this._html5GainNode.gain.setValueAtTime(1, rampFrom);
+      this._html5GainNode.gain.linearRampToValueAtTime(0, muteBy);
       const ctxRef = this.ctx;
       const html5GainRef = this._html5GainNode;
       const delayMs = (when - this.ctx.currentTime + CROSSOVER_FADE_SEC) * 1000 + 5;
@@ -732,7 +803,8 @@ export class Track {
       }, delayMs);
     } else if (!this._html5GainNode) {
       if (when !== null && this.ctx) {
-        const delayMs = (when - this.ctx.currentTime) * 1000;
+        const stopAt = clipEndCtx === null ? when : Math.min(when, clipEndCtx);
+        const delayMs = (stopAt - this.ctx.currentTime) * 1000;
         setTimeout(
           () => {
             this.audio.volume = 0;
@@ -751,6 +823,13 @@ export class Track {
     this.queueRef.onDebug(
       `crossoverHtml5ToWebAudio track=${this.key} offset=${this._crossoverComputedOffset.toFixed(3)} wasPlaying=true fade=${CROSSOVER_FADE_SEC}s mediaSource=${!!this._html5GainNode} when=${when?.toFixed(3) ?? 'null'}`
     );
+  }
+
+  /** AudioContext time at which the HTML5 element reaches clipEnd, or null without one. */
+  private _html5ClipEndContextTime(): number | null {
+    if (this.clipEnd === null || !this.ctx) return null;
+    const rate = this.audio.playbackRate || 1;
+    return this.ctx.currentTime + Math.max(0, this.clipEnd - this.audio.currentTime) / rate;
   }
 
   /**
@@ -794,7 +873,7 @@ export class Track {
     const when = this.ctx.currentTime + lead;
 
     const rate = this.queueRef.playbackRate;
-    const maxOffset = this.audioBuffer.duration - this._bufferStartPaddingSec;
+    const maxOffset = this._bufferClipLength;
     const effectiveOffset = Math.min(offset + lead * rate, maxOffset);
 
     if (fadeInSec > 0) {
@@ -810,12 +889,13 @@ export class Track {
 
     this._waRefCtxTime = when;
     this._waRefTrackTime = effectiveOffset;
-    this.sourceNode.start(when, effectiveOffset + this._bufferStartPaddingSec);
+    this.sourceNode.start(when, effectiveOffset + this._bufferStartPaddingSec + this.clipStart);
 
-    const bufRemaining = this.audioBuffer.duration - this._bufferStartPaddingSec - effectiveOffset;
-    if (bufRemaining > 0) {
-      this.sourceNode.stop(when + bufRemaining / rate);
-    }
+    // Always stop, even with nothing left (a seek to the clip end, or a start
+    // within one lead of it): a clip ends before its file, and an unstopped
+    // source would play on through the rest of the file.
+    const bufRemaining = maxOffset - effectiveOffset;
+    this.sourceNode.stop(when + Math.max(0, bufRemaining) / rate);
     return when;
   }
 
@@ -864,6 +944,10 @@ export class Track {
         return;
       }
       this.queueRef.onProgress(this, this.toInfo());
+      if (this._checkHtml5ClipEnd()) {
+        this.rafId = null;
+        return;
+      }
 
       const remaining = this.duration - this.currentTime;
       const snap = this._actor.getSnapshot();
@@ -887,6 +971,24 @@ export class Track {
       this.rafId = requestAnimationFrame(loop);
     };
     this.rafId = requestAnimationFrame(loop);
+  }
+
+  /**
+   * End an HTML5-playing clip once the element reaches clipEnd. Web Audio
+   * needs no check: its source node is stopped at the clip end. Returns
+   * whether it ended the track.
+   */
+  private _checkHtml5ClipEnd(): boolean {
+    if (this.clipEnd === null) return false;
+    const snap = this._actor.getSnapshot();
+    if (snap.value !== 'html5' || !snap.context.isPlaying) return false;
+    if (this.audio.currentTime < this.clipEnd) return false;
+    this.queueRef.onDebug(
+      `clip end reached on HTML5 track=${this.key} audioTime=${this.audio.currentTime.toFixed(3)} clipEnd=${this.clipEnd}`
+    );
+    this.audio.pause();
+    this._actor.send({ type: 'HTML5_ENDED' });
+    return true;
   }
 
   private _stopProgressLoop(): void {

@@ -1,6 +1,9 @@
 export interface DemoTrack {
   url: string;
   title: string;
+  /** Clip range, in seconds into the file. */
+  start?: number;
+  end?: number;
 }
 
 // Grateful Dead — Barton Hall, Cornell University, 1977-05-08.
