@@ -3,8 +3,8 @@
 // ends, on equal-power ramps on each track's own fade node.
 // ---------------------------------------------------------------------------
 
-import { describe, it, expect, vi } from 'vitest';
-import { Queue } from '../../src/Queue';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { Queue as RealQueue } from '../../src/Queue';
 import type { Track } from '../../src/Track';
 import type { Entry, GaplessOptions } from '../../src/types';
 import {
@@ -13,6 +13,19 @@ import {
   MockAudioElement,
   type MockAudioBufferSourceNode,
 } from '../setup';
+
+// Every queue a test makes is destroyed after it, so its timers and progress
+// loops can't run on into the next test's mocks.
+const queues: RealQueue[] = [];
+class Queue extends RealQueue {
+  constructor(...args: ConstructorParameters<typeof RealQueue>) {
+    super(...args);
+    queues.push(this);
+  }
+}
+afterEach(() => {
+  for (const q of queues.splice(0)) q.destroy();
+});
 
 const flush = async (n = 15) => {
   for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
@@ -28,6 +41,15 @@ const fadeGain = (t: Track): Gain => (t as any)._fadeGainNode.gain;
 const lastCurve = (t: Track) => {
   const calls = fadeGain(t).setValueCurveAtTime.mock.calls;
   return calls.length ? (calls[calls.length - 1] as [Float32Array, number, number]) : null;
+};
+/** Whether a source was stopped on the spot (stop() with no time), not just scheduled to stop. */
+const stoppedNow = (s: MockAudioBufferSourceNode) => s.stop.mock.calls.some((c) => c.length === 0);
+/** Whether the fade node's latest automation is a reset to full level (not a fade curve). */
+const endsAtFull = (t: Track) => {
+  const g = fadeGain(t);
+  const order = (fn: ReturnType<typeof vi.fn>, keep: (c: unknown[]) => boolean) =>
+    Math.max(0, ...fn.mock.calls.map((c, i) => (keep(c) ? fn.mock.invocationCallOrder[i] : 0)));
+  return order(g.setValueAtTime, (c) => c[0] === 1) > order(g.setValueCurveAtTime, () => true);
 };
 const sourcesOf = (t: Track): MockAudioBufferSourceNode[] =>
   ((t as any).ctx.createBufferSource as ReturnType<typeof vi.fn>).mock.results
@@ -155,10 +177,11 @@ describe('during a crossfade', () => {
     const { q, a, b } = await playing(AB, { crossfade: 4 });
     advanceTime(7); // 1 s into the fade
     const incoming = sourcesOf(b).at(-1)!;
+    expect(endsAtFull(a)).toBe(false); // fading out
     q.pause();
-    expect(incoming.stop).toHaveBeenCalled();
+    expect(stoppedNow(incoming)).toBe(true);
     expect(b.scheduledStartContextTime).toBeNull();
-    expect(fadeGain(a).setValueAtTime.mock.calls.at(-1)![0]).toBe(1);
+    expect(endsAtFull(a)).toBe(true);
   });
 
   it('resuming mid-fade fades over the time that is left', async () => {
@@ -186,11 +209,47 @@ describe('during a crossfade', () => {
     expect(q.currentTrack!.currentTime).toBeCloseTo(4, 1);
   });
 
-  it('a track that faded out plays at full level when started again', async () => {
-    const { q, a } = await playing(AB, { crossfade: 4 });
-    q.gotoTrack(0, true);
+  it('a faded-out track still decoded plays at full level when started again', async () => {
+    // Under repeat 'all' with two entries, a is also b's next, so it stays
+    // decoded: going back starts it straight on Web Audio, a fresh start.
+    const { q, a } = await playing(AB, { crossfade: 4, repeat: 'all' });
+    advanceTime(10);
+    sourcesOf(a).at(-1)!.simulateEnded();
     await flush(2);
-    expect(fadeGain(a).setValueAtTime.mock.calls.at(-1)![0]).toBe(1);
+    expect(q.currentTrack?.key).toBe('b');
+    expect(a.isBufferLoaded).toBe(true);
+    const g = fadeGain(a);
+    g.setValueAtTime.mockClear();
+    g.setValueCurveAtTime.mockClear();
+    q.previous();
+    await flush(2);
+    expect(q.currentTrack?.key).toBe('a');
+    expect(a.playbackType).toBe('WEBAUDIO');
+    expect(g.setValueAtTime.mock.calls.some((c) => c[0] === 1)).toBe(true);
+  });
+
+  it('a track that faded out plays at full level when started again', async () => {
+    // The fade completes (a faded to silence and ended), then we go back to
+    // it: nothing is cancelled, so only the fresh start can restore its level.
+    const { q, a } = await playing(AB, { crossfade: 4 });
+    advanceTime(10);
+    sourcesOf(a).at(-1)!.simulateEnded();
+    await flush(2);
+    expect(q.currentTrack?.key).toBe('b');
+    expect(endsAtFull(a)).toBe(false); // left faded out
+    const g = fadeGain(a);
+    const resetsBefore = g.setValueAtTime.mock.calls.filter((c) => c[0] === 1).length;
+    q.previous();
+    await flush(2);
+    expect(q.currentTrack?.key).toBe('a');
+    expect(a.isPlaying).toBe(true);
+    // Back at full level now; the only fade after that is its next fade-out,
+    // due at its own end.
+    expect(g.setValueAtTime.mock.calls.filter((c) => c[0] === 1).length).toBeGreaterThan(
+      resetsBefore
+    );
+    const now = (a as any).ctx.currentTime;
+    if (!endsAtFull(a)) expect(lastCurve(a)![1]).toBeGreaterThan(now + 100);
   });
 });
 
@@ -232,7 +291,7 @@ describe('rescheduling during a crossfade', () => {
     const incoming = sourcesOf(b).at(-1)!;
     q.seek(a.duration - 20);
     await flush(2);
-    expect(incoming.stop).toHaveBeenCalled();
+    expect(stoppedNow(incoming)).toBe(true);
     expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime! - 8, 5);
   });
 });
@@ -327,11 +386,14 @@ describe('crossfades over HTML5', () => {
     expect(inCurve[0]).toBe(0);
     expect(dur).toBeCloseTo(4, 1);
 
+    const curves = fadeGain(b).setValueCurveAtTime.mock.calls.length;
     await sleep(80);
     expect(b.machineState).toBe('html5');
     expect(b.isPlaying).toBe(true);
     expect(el(b).play).toHaveBeenCalledTimes(1);
-    // play() reset the fade for a fresh start; the fade-in was put back.
+    // play() reset the fade for a fresh start; the fade-in was put back after it.
+    expect(fadeGain(b).setValueCurveAtTime.mock.calls.length).toBe(curves + 1);
+    expect(endsAtFull(b)).toBe(false);
     expect(lastCurve(b)![1]).toBe(at);
     expect(lastCurve(a)![1]).toBeCloseTo(at, 5);
   });
@@ -364,7 +426,7 @@ describe('crossfades over HTML5', () => {
     await flush(2);
     expect(q.currentTrack?.key).toBe('b');
     expect(b.isPlaying).toBe(true);
-    expect(fadeGain(b).setValueAtTime.mock.calls.at(-1)![0]).toBe(1);
+    expect(endsAtFull(b)).toBe(true);
   });
 
   it('pause mid-fade stops the streaming incoming track', async () => {
@@ -458,7 +520,7 @@ describe('codex review: edge cases', () => {
     const resets = fadeGain(a).cancelScheduledValues.mock.calls.length;
     q.removeTrack(1);
     expect(fadeGain(a).cancelScheduledValues.mock.calls.length).toBeGreaterThan(resets);
-    expect(fadeGain(a).setValueAtTime.mock.calls.at(-1)![0]).toBe(1);
+    expect(endsAtFull(a)).toBe(true);
     expect((q as any)._scheduledNext).toBeNull();
   });
 
@@ -550,5 +612,69 @@ describe('a deferred transition is retried', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('review: speed changes, entry edits, destroyed tracks', () => {
+  it('changing speed mid-fade keeps both tracks going and retimes the fades', async () => {
+    const { q, a, b } = await playing(AB, { crossfade: 4 });
+    advanceTime(8); // 2 s into the fade
+    const incoming = sourcesOf(b).at(-1)!;
+    const started = sourcesOf(b).length;
+    q.setPlaybackRate(1.25);
+    await flush(2);
+    expect(sourcesOf(b)).toHaveLength(started); // not restarted
+    expect(stoppedNow(incoming)).toBe(false);
+    expect(incoming.playbackRate.value).toBe(1.25);
+    const end = a.playbackEndContextTime!;
+    const outRamp = (a as any)._fadeGainNode.gain.linearRampToValueAtTime.mock.calls.at(-1);
+    const inRamp = (b as any)._fadeGainNode.gain.linearRampToValueAtTime.mock.calls.at(-1);
+    expect(outRamp).toEqual([0, expect.closeTo(end, 5)]);
+    expect(inRamp).toEqual([1, expect.closeTo(end, 5)]);
+  });
+
+  it('changing speed before the fade starts just reschedules it', async () => {
+    const { q, a, b } = await playing(AB, { crossfade: 4 });
+    q.setPlaybackRate(2);
+    await flush(2);
+    expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime! - 4, 5);
+  });
+
+  it('setEntries applies a new crossfade to an entry already in the queue', async () => {
+    const { q, a, b } = await playing(AB);
+    expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime!, 5);
+    q.setEntries([AB[0], { ...AB[1], crossfade: 4 }]);
+    await flush(2);
+    expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime! - 4, 5);
+    expect(q.snapshot().entries[1].crossfade).toBe(4);
+  });
+
+  it('setEntries with a new clip range rebuilds an entry that is not playing', async () => {
+    const q = new Queue();
+    q.setEntries(AB);
+    const before = (q as any)._tracks[1];
+    q.setEntries([AB[0], { ...AB[1], start: 30, end: 40 }]);
+    const after = (q as any)._tracks[1] as Track;
+    expect(after).not.toBe(before);
+    expect([after.clipStart, after.clipEnd]).toEqual([30, 40]);
+    expect(q.snapshot().entries[1]).toMatchObject({ start: 30, end: 40 });
+  });
+
+  it('the playing entry keeps its range when setEntries changes it', async () => {
+    const { q, a } = await playing(AB);
+    q.setEntries([{ ...AB[0], start: 5 }, AB[1]]);
+    expect((q as any)._tracks[0]).toBe(a);
+    expect(a.isPlaying).toBe(true);
+    expect(a.clipStart).toBe(0);
+  });
+
+  it('removing the current track does not rebuild audio nodes on it', async () => {
+    const { q, a } = await playing(AB, { crossfade: 4 });
+    const ctx = (a as any).ctx;
+    const mediaSources = ctx.createMediaElementSource.mock.calls.length;
+    q.removeTrack(0);
+    await flush(2);
+    expect((a as any).gainNode).toBeNull();
+    expect(ctx.createMediaElementSource.mock.calls.length).toBe(mediaSources);
   });
 });

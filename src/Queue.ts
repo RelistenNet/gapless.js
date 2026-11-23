@@ -40,6 +40,11 @@ const FADE_DRIFT_SEC = 0.25;
 /** How far ahead of now a crossfade can start, so both ramps are in the future. */
 const CROSSFADE_LEAD_SEC = 0.05;
 
+/** Whether a track still plays what `e` describes (same file, same clip). */
+function sameSource(t: Track, e: Entry): boolean {
+  return t.sourceUrl === e.url && t.clipStart === (e.start ?? 0) && t.clipEnd === (e.end ?? null);
+}
+
 function assertCrossfade(seconds: number | undefined): void {
   if (seconds !== undefined && !(seconds >= 0 && isFinite(seconds))) {
     throw new Error(`gapless: crossfade must be a finite number >= 0 (got ${seconds})`);
@@ -403,9 +408,26 @@ export class Queue implements TrackQueueRef {
   setPlaybackRate(rate: number): void {
     const clamped = Math.min(4, Math.max(0.25, rate));
     this._playbackRate = clamped;
-    this._currentTrack?.setPlaybackRate(clamped);
+    const cur = this._currentTrack;
+    cur?.setPlaybackRate(clamped);
+    // Mid-fade, both tracks are audible: rescheduling would restart the
+    // incoming one and snap the outgoing one back to full level. Run both at
+    // the new rate instead and re-aim the fades at the new end time.
+    const next = this._scheduledNext;
+    const was = this._scheduledFor;
+    const ctx = getAudioContext();
+    if (cur && next && was && ctx && was.want > 0 && was.start <= ctx.currentTime) {
+      next.setPlaybackRate(clamped);
+      const end = this._computeTrackEndTime(cur);
+      if (end !== null) {
+        cur.retimeFade(0, end);
+        next.retimeFade(1, end);
+        this._scheduledFor = { ...was, endTime: end };
+        return;
+      }
+    }
     this._cancelScheduledGapless();
-    if (this.isPlaying) this._tryScheduleGapless(this._currentTrack);
+    if (this.isPlaying) this._tryScheduleGapless(cur);
   }
 
   addTrack(url: string, options: AddTrackOptions = {}): void {
@@ -454,6 +476,10 @@ export class Queue implements TrackQueueRef {
    * decoded buffers and in-flight preloads. If the current track's key
    * survives it keeps playing, untouched; otherwise playback moves to
    * `startKey` (or the first entry).
+   *
+   * A surviving key takes its entry's new `crossfade`. One whose source
+   * changed (`url`, `start` or `end`) is rebuilt, except the playing entry,
+   * which keeps playing what it was.
    */
   setEntries(
     entries: readonly Entry[],
@@ -465,13 +491,25 @@ export class Queue implements TrackQueueRef {
     );
     this._assertValidClips(entries);
     const byKey = new Map(this._tracks.map((t) => [t.key, t]));
-    const next = entries.map((e) => byKey.get(e.key) ?? this._createTrack(e));
-    const kept = new Set(next);
     const cur = this._currentTrack;
+    let fadeChanged = false;
+    const next = entries.map((e) => {
+      const old = byKey.get(e.key);
+      if (!old || (old !== cur && !sameSource(old, e))) return this._createTrack(e);
+      const fade = e.crossfade ?? null;
+      if (fade !== old.crossfadeIn) {
+        old.setCrossfadeIn(fade);
+        fadeChanged = true;
+      }
+      return old;
+    });
+    const kept = new Set(next);
 
     if (cur && kept.has(cur)) {
       for (const t of this._tracks) if (!kept.has(t)) this._dropTrack(t);
       this._applyOrder(next);
+      // A fade into the next entry changed: redo (or now try) its transition.
+      if (fadeChanged && this.isPlaying) this._rescheduleGapless(cur);
       return;
     }
 

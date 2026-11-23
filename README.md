@@ -226,7 +226,7 @@ Pass `start` and/or `end` (seconds into the file) to play only part of a file. E
 player.addTrack('https://example.com/set.mp3', { start: 754.2, end: 1131.8 });
 ```
 
-Times the queue reports and accepts (`currentTime`, `duration`, `seek`) are relative to the clip, so a clip behaves like a short track. Consecutive clips, from the same file or from different files, join gaplessly on Web Audio. The whole file is still downloaded and decoded, once: clips of the same file share one decoded buffer, which is freed when the last of them unloads. During HTML5 playback (before the decode finishes) a clip is stopped by polling, so it can run a few milliseconds past `end`.
+Times the queue reports and accepts (`currentTime`, `duration`, `seek`) are relative to the clip, so a clip behaves like a short track. Consecutive clips, from the same file or from different files, join gaplessly on Web Audio. The whole file is still downloaded and decoded, once: clips of the same file share one decoded buffer, which is freed when the last of them unloads. During HTML5 playback (before the decode finishes) the element is silenced exactly at `end` on the AudioContext clock, then paused; in `HTML5_ONLY` mode, where nothing goes through the AudioContext, it is stopped by polling and can run a little past `end` (up to ~250 ms in a background tab). `setEntries` and `restore` rebuild an entry whose `url`, `start` or `end` changed, except the playing one, which keeps playing what it was.
 
 #### Crossfades
 
@@ -244,7 +244,7 @@ The next entry starts `crossfade` seconds before the current one ends, and the t
 
 Crossfades don't wait for decoding. A short clip of a long file often isn't decoded by the time its fade starts, so either entry can fade while still streaming over HTML5: the outgoing one fades from its estimated end, and an incoming one not decoded yet starts streaming on a timer, silent until its fade begins. These are accurate to tens of milliseconds rather than to the sample, which you can't hear in a fade. If the decode finishes mid-fade, the entry moves to Web Audio without interrupting it. Fading a streaming entry needs it routed through the AudioContext, as `HYBRID` does when the server sends CORS headers; in `HTML5_ONLY` mode transitions are cuts.
 
-Pausing or seeking mid-fade stops the incoming entry; on resume it starts over with a fade over the time left. Skipping to the next entry mid-fade starts it from its beginning.
+Pausing or seeking mid-fade stops the incoming entry; on resume it starts over with a fade over the time left. Skipping to the next entry mid-fade starts it from its beginning. Changing the playback rate mid-fade keeps both entries playing and re-aims the fade at the new end. `setEntries` and `restore` apply a changed `crossfade` to an entry already in the queue.
 
 ### `TrackMetadata`
 

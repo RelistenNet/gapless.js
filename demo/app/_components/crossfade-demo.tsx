@@ -7,8 +7,10 @@ import { JAMS, JAM_SECONDS, formatTime } from './tracks';
 import { PauseIcon, PlayIcon } from './icons';
 import { StageBadge, type Tone } from './ui';
 
-const FADES = [0, 2, 5, 8] as const;
-const INITIAL_FADE = 5;
+// Up to half a clip: the library caps a fade at half the incoming entry, so
+// longer ones would play shorter than drawn.
+const FADES = [0, 2, 4, 6] as const;
+const INITIAL_FADE = 4;
 
 function stage(info: TrackInfo | undefined, isCurrent: boolean): { tone: Tone; label: string } {
   if (!info) return { tone: 'neutral', label: 'Not loaded' };
@@ -136,8 +138,21 @@ export function CrossfadeDemo() {
           return (
             <div key={jam.title} className="relative h-11">
               <div
+                role="button"
+                tabIndex={0}
+                aria-label={`Play ${jam.title}`}
                 onClick={onClick}
-                className="absolute inset-y-0 cursor-pointer overflow-hidden rounded-md bg-violet-600/10 dark:bg-violet-300/10"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    play(i, 0);
+                  } else if (i === idx && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
+                    e.preventDefault();
+                    const t = (current?.currentTime ?? 0) + (e.key === 'ArrowRight' ? 1 : -1);
+                    play(i, Math.max(0, Math.min(JAM_SECONDS - 0.25, t)));
+                  }
+                }}
+                className="absolute inset-y-0 cursor-pointer overflow-hidden rounded-md bg-violet-600/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700 dark:bg-violet-300/10 dark:focus-visible:outline-violet-300"
                 style={{ left: `${left}%`, width: `${width}%` }}
               >
                 <GainCurve
