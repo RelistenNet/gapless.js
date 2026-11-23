@@ -1,6 +1,7 @@
 import { NativeDemo } from './_components/native-demo';
 import { GaplessDemo } from './_components/gapless-demo';
 import { ClipsDemo } from './_components/clips-demo';
+import { CrossfadeDemo } from './_components/crossfade-demo';
 import { FullShow } from './_components/player';
 import { SiteHeader } from './_components/site-header';
 import { StageBadge } from './_components/ui';
@@ -54,6 +55,11 @@ export default function Home() {
           <StageBadge stage={{ tone: 'good', label: 'Gapless' }} />
         </p>
         <ClipsDemo />
+        <p className="flex items-center gap-2 font-semibold text-zinc-600 dark:text-zinc-100">
+          Crossfades: fading between songs
+          <StageBadge stage={{ tone: 'good', label: 'Optional' }} />
+        </p>
+        <CrossfadeDemo />
         <p className="font-semibold text-zinc-600 dark:text-zinc-100 flex gap-2">
           A complete gapless.js concert
         </p>

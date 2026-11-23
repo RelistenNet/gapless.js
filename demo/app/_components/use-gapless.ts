@@ -57,7 +57,8 @@ class GaplessStore {
   constructor(
     private readonly id: string,
     private readonly list: DemoTrack[],
-    volume: number
+    volume: number,
+    private readonly crossfade = 0
   ) {
     this.initial = {
       state: 'idle',
@@ -90,6 +91,7 @@ class GaplessStore {
       tracks: clipped ? [] : this.list.map((t) => t.url),
       trackMetadata: clipped ? [] : this.list.map((t) => ({ title: t.title })),
       volume: this.snapshot.volume,
+      crossfade: this.crossfade,
       onProgress: (info) => {
         this.lastProgress.set(info.index, info);
         this.sync();
@@ -102,16 +104,12 @@ class GaplessStore {
       onPlayBlocked: () =>
         this.sync({ state: 'paused' }, 'Autoplay was blocked. Press play to start.', 'error'),
     });
+    // addTrack, not setEntries: setEntries goes to the first entry, which
+    // preloads it, and nothing should download before the listener presses play.
     if (clipped) {
-      queue.setEntries(
-        this.list.map((t, i) => ({
-          key: `${this.id}-${i}`,
-          url: t.url,
-          metadata: { title: t.title },
-          start: t.start,
-          end: t.end,
-        }))
-      );
+      for (const t of this.list) {
+        queue.addTrack(t.url, { metadata: { title: t.title }, start: t.start, end: t.end });
+      }
     }
     this.queue = queue;
     this.sync();
@@ -219,6 +217,10 @@ class GaplessStore {
       this.queue?.setVolume(v);
       this.sync({ volume: v });
     },
+    setCrossfade: (seconds: number) => {
+      this.queue?.setCrossfade(seconds);
+      this.sync({}, seconds > 0 ? `Crossfade set to ${seconds}s` : 'Crossfade off (gapless cut)');
+    },
     setPlaybackRate: (rate: number) => {
       this.queue?.setPlaybackRate(rate);
       this.sync({ playbackRate: rate });
@@ -227,8 +229,14 @@ class GaplessStore {
   };
 }
 
-export function useGapless(id: string, tracks: DemoTrack[], options: { volume?: number } = {}) {
-  const [store] = useState(() => new GaplessStore(id, tracks, options.volume ?? 0.8));
+export function useGapless(
+  id: string,
+  tracks: DemoTrack[],
+  options: { volume?: number; crossfade?: number } = {}
+) {
+  const [store] = useState(
+    () => new GaplessStore(id, tracks, options.volume ?? 0.8, options.crossfade ?? 0)
+  );
   useEffect(() => store.connect(), [store]);
   const snapshot = useSyncExternalStore(
     store.subscribe,

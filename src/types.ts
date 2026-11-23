@@ -65,6 +65,11 @@ export interface GaplessOptions {
   playbackRate?: number;
   /** Initial repeat mode. Defaults to 'off'. */
   repeat?: RepeatMode;
+  /**
+   * Default crossfade between tracks, in seconds. Defaults to 0 (gapless).
+   * An entry's own `crossfade` overrides it for the transition into it.
+   */
+  crossfade?: number;
 }
 
 /** Options for dynamically adding a track. */
@@ -85,6 +90,11 @@ export interface AddTrackOptions {
    * clip: 0 is `start`. The whole file is still downloaded and decoded.
    */
   end?: number;
+  /**
+   * Seconds to crossfade into this entry from the one before it, overriding
+   * the queue's default. 0 keeps the transition gapless.
+   */
+  crossfade?: number;
 }
 
 /** What happens at the end of a track: stop at the end, loop the list, or loop the track. */
@@ -120,6 +130,11 @@ export interface Entry {
    * clip: 0 is `start`. The whole file is still downloaded and decoded.
    */
   end?: number;
+  /**
+   * Seconds to crossfade into this entry from the one before it, overriding
+   * the queue's default. 0 keeps the transition gapless.
+   */
+  crossfade?: number;
 }
 
 /** Where to place inserted or moved entries. */

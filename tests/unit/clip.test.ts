@@ -287,3 +287,67 @@ describe('clips in the queue', () => {
     expect(q.snapshot().entries.map((e) => e.key)).toEqual(['a']);
   });
 });
+
+describe('clip end on HTML5, on the AudioContext clock', () => {
+  it('mutes the element exactly at clipEnd once it is near, and undoes that on a seek back', () => {
+    const t = new Track({ trackUrl: 'a.mp3', queue: makeQueue(), start: 30, end: 75 });
+    const el = t.audio as unknown as MockAudioElement;
+    t.play();
+    loadMetadata(t);
+    const gain = (t as any)._html5GainNode.gain;
+    const now = (t as any).ctx.currentTime;
+
+    el.currentTime = 70; // 5 s out: too early to arm
+    (el as any).ontimeupdate();
+    expect(gain.setValueAtTime.mock.calls.some((c: number[]) => c[0] === 0)).toBe(false);
+
+    el.currentTime = 74.7; // 0.3 s out
+    (el as any).ontimeupdate();
+    const mute = gain.setValueAtTime.mock.calls.find((c: number[]) => c[0] === 0);
+    expect(mute?.[1]).toBeCloseTo(now + 0.3, 5);
+
+    t.seek(10);
+    loadMetadata(t);
+    expect(gain.setValueAtTime.mock.calls.at(-1)).toEqual([1, expect.any(Number)]);
+  });
+});
+
+describe('clip-end mute when streaming stalls', () => {
+  function armedNearEnd() {
+    const t = new Track({ trackUrl: 'a.mp3', queue: makeQueue(), start: 30, end: 75 });
+    const el = t.audio as unknown as MockAudioElement;
+    t.play();
+    loadMetadata(t);
+    el.currentTime = 74.7; // 0.3 s out: arms
+    (el as any).ontimeupdate();
+    return { t, el, gain: (t as any)._html5GainNode.gain };
+  }
+  const now = (t: Track) => (t as any).ctx.currentTime as number;
+
+  it('re-aims the mute when the predicted end moves (the element stalled)', () => {
+    const { t, el, gain } = armedNearEnd();
+    advanceTime(0.5); // the AudioContext moves on; the element doesn't
+    (el as any).ontimeupdate();
+    const calls = gain.setValueAtTime.mock.calls as [number, number][];
+    // Back to full now, and the mute moved to the new predicted end.
+    expect(calls.at(-2)).toEqual([1, expect.closeTo(now(t), 5)]);
+    expect(calls.at(-1)).toEqual([0, expect.closeTo(now(t) + 0.3, 5)]);
+  });
+
+  it('cancels the mute when the element starts waiting for data', () => {
+    const { el, gain } = armedNearEnd();
+    const before = gain.setValueAtTime.mock.calls.length;
+    (el as any).onwaiting();
+    expect(gain.setValueAtTime.mock.calls.length).toBe(before + 1);
+    expect(gain.setValueAtTime.mock.calls.at(-1)[0]).toBe(1);
+  });
+
+  it('leaves a mute alone while the prediction holds', () => {
+    const { el, gain } = armedNearEnd();
+    const before = gain.setValueAtTime.mock.calls.length;
+    advanceTime(0.1);
+    el.currentTime = 74.8;
+    (el as any).ontimeupdate();
+    expect(gain.setValueAtTime.mock.calls.length).toBe(before);
+  });
+});

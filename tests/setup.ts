@@ -64,11 +64,13 @@ export class MockGainNode {
     setValueAtTime: Mock;
     linearRampToValueAtTime: Mock;
     cancelScheduledValues: Mock;
+    setValueCurveAtTime: Mock;
   } = {
     value: 1,
     setValueAtTime: vi.fn(),
     linearRampToValueAtTime: vi.fn(),
     cancelScheduledValues: vi.fn(),
+    setValueCurveAtTime: vi.fn(),
   };
   connect: Mock = vi.fn();
   disconnect: Mock = vi.fn();

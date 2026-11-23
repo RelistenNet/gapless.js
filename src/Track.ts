@@ -31,10 +31,29 @@ export interface TrackQueueRef {
   readonly currentKey: string | null;
   /** This track's position in the queue's play order, or -1 if it isn't in it. */
   indexOf(track: Track): number;
+  /**
+   * Seconds of crossfade into the track after `track`, if it fades in: its
+   * transition must be scheduled that much earlier than a gapless one.
+   */
+  crossfadeAfter?(track: Track): number;
+  /**
+   * The element's timing may have moved (it resumed after a stall, or
+   * reported progress): a transition timed from it may need re-aiming. Fires
+   * without the progress loop, which doesn't run in a background tab.
+   */
+  onTimingChanged?(track: Track): void;
 }
 
 /** How close to the end (in seconds) before we attempt gapless scheduling. */
 const GAPLESS_SCHEDULE_LOOKAHEAD = 5;
+
+/**
+ * How near clipEnd (wall-clock seconds) an HTML5 clip arms its exact mute.
+ * Wider than the ~250 ms between timeupdate events, so it always arms.
+ */
+const CLIP_END_ARM_SEC = 0.6;
+/** How far the predicted clip end can move before the armed mute is re-aimed. */
+const CLIP_END_DRIFT_SEC = 0.03;
 
 /** How many seconds into HTML5 playback before we preload the next track. */
 const PRELOAD_DELAY = 15;
@@ -50,6 +69,15 @@ const PRELOAD_DELAY = 15;
 const CROSSOVER_FADE_SEC = 0.03;
 
 let _autoKey = 0;
+
+/** Equal-power crossfade curves: the two gains' squares sum to 1 throughout. */
+const CURVE_POINTS = 64;
+const FADE_IN_CURVE = Float32Array.from({ length: CURVE_POINTS }, (_, i) =>
+  Math.sin(((i / (CURVE_POINTS - 1)) * Math.PI) / 2)
+);
+const FADE_OUT_CURVE = Float32Array.from({ length: CURVE_POINTS }, (_, i) =>
+  Math.cos(((i / (CURVE_POINTS - 1)) * Math.PI) / 2)
+);
 
 /**
  * Check a clip range (seconds into the file). Throws on a range that can't
@@ -86,6 +114,11 @@ export class Track {
   readonly clipStart: number;
   /** End of the clip in file seconds, or null to play to the end of the file. */
   readonly clipEnd: number | null;
+  /** Seconds to crossfade into this track, or null to use the queue's default. */
+  private _crossfadeIn: number | null;
+  private _destroyed = false;
+  /** When the HTML5 clip-end mute is set for (AudioContext time), or null (see cancelHtml5Mute). */
+  private _clipEndMuteAt: number | null = null;
 
   private _trackUrl: string;
   private _resolvedUrl: string;
@@ -102,12 +135,18 @@ export class Track {
   private readonly _playbackMethod: PlaybackMethod;
 
   private get ctx(): AudioContext | null {
-    if (this._playbackMethod === 'HTML5_ONLY') return null;
+    // A destroyed track never builds its nodes again (a late call would
+    // connect a new GainNode to the destination and re-route the element).
+    if (this._playbackMethod === 'HTML5_ONLY' || this._destroyed) return null;
     const context = getAudioContext();
     if (context && !this.gainNode) {
       this.gainNode = context.createGain();
       this.gainNode.gain.value = this.audio.volume;
       this.gainNode.connect(context.destination);
+      // Crossfades ramp this node; volume stays on gainNode, so setVolume
+      // can't cancel a fade in progress (or a fade pin the volume).
+      this._fadeGainNode = context.createGain();
+      this._fadeGainNode.connect(this.gainNode);
 
       // Route the HTML5 element through the AudioContext via a
       // MediaElementAudioSourceNode + dedicated GainNode. With this routing,
@@ -129,7 +168,9 @@ export class Track {
         this._html5GainNode = context.createGain();
         this._html5GainNode.gain.value = 1;
         this._mediaElementSource.connect(this._html5GainNode);
-        this._html5GainNode.connect(this.gainNode);
+        // Through the fade node, like Web Audio sources: a crossfade can
+        // then fade a track that is still streaming.
+        this._html5GainNode.connect(this._fadeGainNode);
         this.audio.volume = 1;
       } catch {
         this._mediaElementSource = null;
@@ -142,6 +183,16 @@ export class Track {
   private gainNode: GainNode | null = null;
   private _mediaElementSource: MediaElementAudioSourceNode | null = null;
   private _html5GainNode: GainNode | null = null;
+  /** Between Web Audio sources and gainNode; carries crossfade ramps. */
+  private _fadeGainNode: GainNode | null = null;
+  /** Fade-in length (s) for the scheduled start, 0 for a gapless one. */
+  private _scheduledFadeIn = 0;
+  /** A crossfade start over HTML5 (see scheduleHtml5Start); timer null once fired. */
+  private _html5Start: {
+    when: number;
+    fadeIn: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  } | null = null;
   private sourceNode: AudioBufferSourceNode | null = null;
   audioBuffer: AudioBuffer | null = null;
   /** AudioContext.currentTime at the start of the current playback segment. */
@@ -189,7 +240,13 @@ export class Track {
     start?: number;
     /** Seconds into the file to stop at. */
     end?: number;
+    /** Seconds to crossfade into this track from the one before it. */
+    crossfade?: number;
   }) {
+    if (opts.crossfade !== undefined && !(opts.crossfade >= 0 && isFinite(opts.crossfade))) {
+      throw new Error(`gapless: crossfade must be a finite number >= 0 (got ${opts.crossfade})`);
+    }
+    this._crossfadeIn = opts.crossfade ?? null;
     const clip = normalizeClip(opts.start, opts.end);
     this.clipStart = clip.start;
     this.clipEnd = clip.end;
@@ -226,6 +283,9 @@ export class Track {
         new Error(`HTML5 audio error on track ${this.key} (code ${code}): ${msg}`)
       );
     };
+    const timingChanged = () => this.queueRef.onTimingChanged?.(this);
+    this.audio.addEventListener('playing', timingChanged);
+    this.audio.addEventListener('timeupdate', timingChanged);
     this.audio.onended = () => {
       this.queueRef.onDebug(
         `audio.onended track=${this.key} machineState=${this._actor.getSnapshot().value} queueCurrent=${this.queueRef.currentKey}`
@@ -237,6 +297,13 @@ export class Track {
     // background tabs (where rAF doesn't run).
     if (this.clipEnd !== null) {
       this.audio.ontimeupdate = () => this._checkHtml5ClipEnd();
+      // Stalled to buffer: the element's clock stops and any clip-end mute
+      // would land early. Drop it; the next check re-arms it from where the
+      // element really is. (In a background tab timeupdate also stops during
+      // a stall, so re-aiming on each check alone wouldn't catch this.)
+      this.audio.onwaiting = () => {
+        if (this._clipEndMuteAt !== null) this.cancelHtml5Mute();
+      };
     }
 
     this._playbackMethod = opts.queue.playbackMethod;
@@ -329,8 +396,13 @@ export class Track {
           this.sourceNode = this.ctx.createBufferSource();
           this.sourceNode.buffer = this.audioBuffer;
           this.sourceNode.playbackRate.value = this.queueRef.playbackRate;
-          this.sourceNode.connect(this.gainNode);
+          this.sourceNode.connect(this._sourceOutput);
           this.sourceNode.onended = this._handleWebAudioEnded;
+          if (this._scheduledFadeIn > 0) {
+            this._rampFade(FADE_IN_CURVE, when, this._scheduledFadeIn);
+          } else {
+            this._resetFade();
+          }
           this.sourceNode.start(when, this._bufferStartPaddingSec + this.clipStart);
           const bufRemaining = this._bufferClipLength;
           const schedRate = this.sourceNode.playbackRate.value || 1;
@@ -416,6 +488,8 @@ export class Track {
   }
 
   setPlaybackRate(rate: number): void {
+    // A clip-end mute was timed for the old rate; it re-arms near the end.
+    if (this._actor.getSnapshot().value === 'html5') this.cancelHtml5Mute();
     if (
       this.ctx &&
       this.sourceNode &&
@@ -501,11 +575,14 @@ export class Track {
   }
 
   destroy(): void {
+    if (this._html5Start?.timer) clearTimeout(this._html5Start.timer);
+    this._html5Start = null;
     this.deactivate();
     this._dropPendingDecode();
     this.audioBuffer = null;
     this.gainNode?.disconnect();
     this.gainNode = null;
+    this._destroyed = true;
     this._actor.stop();
   }
 
@@ -520,23 +597,174 @@ export class Track {
   }
 
   cancelHtml5Mute(): void {
+    this._clipEndMuteAt = null;
     if (!this._html5GainNode || !this.ctx) return;
     this._html5GainNode.gain.cancelScheduledValues(this.ctx.currentTime);
     this._html5GainNode.gain.setValueAtTime(1, this.ctx.currentTime);
   }
 
+  /** Seconds to crossfade into this track, or null to use the queue's default. */
+  get crossfadeIn(): number | null {
+    return this._crossfadeIn;
+  }
+
+  /** Change the fade into this track (the queue reschedules a pending transition). */
+  setCrossfadeIn(seconds: number | null): void {
+    this._crossfadeIn = seconds;
+  }
+
+  /**
+   * Re-aim a fade in progress: from wherever the level is now to `to` by
+   * `end` (a playback-rate change moved the end). Linear from the current
+   * level, so nothing jumps.
+   */
+  retimeFade(to: 0 | 1, end: number): void {
+    const gain = this._fadeGainNode?.gain;
+    if (!gain || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    const from = gain.value;
+    gain.cancelScheduledValues(0);
+    gain.setValueAtTime(from, now);
+    gain.linearRampToValueAtTime(to, Math.max(end, now + 0.01));
+  }
+
+  /** Undo scheduleGaplessStart or scheduleHtml5Start, stopping the track if it began. */
   cancelGaplessStart(): void {
+    this._cancelHtml5Start();
     const snap = this._actor.getSnapshot();
     if (snap.context.scheduledStartContextTime === null) return;
+    this._scheduledFadeIn = 0;
     this._actor.send({ type: 'CANCEL_GAPLESS' });
   }
 
-  scheduleGaplessStart(when: number): boolean {
+  /**
+   * Whether this track can fade while streaming over HTML5: its element is
+   * routed through the AudioContext (and so through the fade node). Not in
+   * HTML5_ONLY mode, nor if routing failed; there only a cut is possible.
+   */
+  get canFadeHtml5(): boolean {
+    return !!this.ctx && !!this._html5GainNode && !!this._fadeGainNode;
+  }
+
+  /**
+   * For a crossfade into a track that isn't decoded yet: start streaming it
+   * over HTML5 at `when` (AudioContext time), fading in over `fadeIn`. A fade
+   * needn't be sample-accurate, so a timer starting the element is enough;
+   * the fade node holds it silent until `when`. The element is primed now so
+   * it can start promptly. If the decode finishes mid-fade, the track crosses
+   * over to Web Audio with the fade intact.
+   */
+  scheduleHtml5Start(when: number, fadeIn: number): boolean {
+    if (this._playbackMethod !== 'HYBRID' || !this.canFadeHtml5 || !this.ctx) return false;
+    const state = this._actor.getSnapshot().value;
+    if (state !== 'idle' && state !== 'loading') return false;
+    this._cancelHtml5Start();
+    this._rampFade(FADE_IN_CURVE, when, fadeIn);
+    this._seekHtml5(0); // buffer from the clip start ahead of time
+    const delayMs = Math.max(0, (when - this.ctx.currentTime) * 1000);
+    this._html5Start = {
+      when,
+      fadeIn,
+      timer: setTimeout(() => {
+        if (!this._html5Start) return;
+        this._html5Start.timer = null;
+        this.queueRef.onDebug(
+          `html5 crossfade start track=${this.key} fadeIn=${fadeIn.toFixed(2)}s`
+        );
+        this.play();
+        // play() resets the fade for a fresh start; this one is part of a fade.
+        this._rampFade(FADE_IN_CURVE, when, fadeIn);
+      }, delayMs),
+    };
+    return true;
+  }
+
+  /** Whether a start is scheduled (Web Audio or HTML5) and hasn't been cancelled. */
+  get hasScheduledStart(): boolean {
+    return this.scheduledStartContextTime !== null || this._html5Start !== null;
+  }
+
+  private _cancelHtml5Start(): void {
+    const pending = this._html5Start;
+    if (!pending) return;
+    this._html5Start = null;
+    if (pending.timer !== null) {
+      clearTimeout(pending.timer);
+      this._resetFade();
+      return;
+    }
+    // It started: stop it and put it back to the clip start.
+    this.deactivate();
+    this._resetFade();
+  }
+
+  /**
+   * The queue reached this track (its predecessor ended). A pending HTML5
+   * start turns into the track simply playing on; one whose timer hasn't
+   * fired yet (the predecessor ended early) starts now.
+   */
+  takeOverScheduledStart(): void {
+    const pending = this._html5Start;
+    if (!pending) return;
+    this._html5Start = null;
+    if (pending.timer !== null) {
+      clearTimeout(pending.timer);
+      this._resetFade();
+      this.play();
+    }
+  }
+
+  /**
+   * Start this track at `when` on the AudioContext clock: gapless, or fading
+   * in over `fadeIn` seconds while the previous track fades out.
+   */
+  scheduleGaplessStart(when: number, fadeIn = 0): boolean {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return false;
     const state = this._actor.getSnapshot().value;
     if (state !== 'idle' && state !== 'loading') return false;
+    this._scheduledFadeIn = fadeIn;
     this._actor.send({ type: 'SCHEDULE_GAPLESS', when });
     return true;
+  }
+
+  /** Fade this (playing) track out over `duration` seconds from `at`, for a crossfade. */
+  scheduleFadeOut(at: number, duration: number): void {
+    this._rampFade(FADE_OUT_CURVE, at, duration);
+  }
+
+  /** Undo scheduleFadeOut: back to full level now. */
+  cancelFadeOut(): void {
+    this._resetFade();
+  }
+
+  /** Where Web Audio sources connect: the fade node (made with gainNode in the ctx getter). */
+  private get _sourceOutput(): AudioNode {
+    const out = this._fadeGainNode ?? this.gainNode;
+    if (!out) throw new Error('gapless: no Web Audio output for this track');
+    return out;
+  }
+
+  private _rampFade(curve: Float32Array, at: number, duration: number): void {
+    const gain = this._fadeGainNode?.gain;
+    if (!gain || !this.ctx) return;
+    gain.cancelScheduledValues(0);
+    // setValueCurveAtTime throws if any other event falls strictly inside the
+    // curve, so anchor both at the same time, never in the past.
+    const start = Math.max(at, this.ctx.currentTime);
+    const left = at + duration - start;
+    if (left <= 0) {
+      gain.setValueAtTime(curve[curve.length - 1], start);
+      return;
+    }
+    gain.value = curve[0];
+    gain.setValueCurveAtTime(curve, start, left);
+  }
+
+  private _resetFade(): void {
+    const gain = this._fadeGainNode?.gain;
+    if (!gain || !this.ctx) return;
+    gain.cancelScheduledValues(0);
+    gain.setValueAtTime(1, this.ctx.currentTime);
   }
 
   // --------------------------------------------------------------------------
@@ -669,6 +897,10 @@ export class Track {
   // --------------------------------------------------------------------------
 
   private _playHtml5(seekTarget: number): void {
+    // A fresh start (play, resume) ends any crossfade this track was in,
+    // and any mute left on the element (a clip end, a gapless end).
+    this._resetFade();
+    this.cancelHtml5Mute();
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
     this.audio.playbackRate = this.queueRef.playbackRate;
     const target = this.clipStart + seekTarget;
@@ -740,6 +972,7 @@ export class Track {
 
   private _seekHtml5(clipTime: number): void {
     if (!isFinite(clipTime)) return;
+    this.cancelHtml5Mute(); // a clip-end mute armed for the old position
     const target = this.clipStart + clipTime;
     if (this.audio.preload !== 'auto') this.audio.preload = 'auto';
     if (this.audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
@@ -800,7 +1033,8 @@ export class Track {
     // the machine is in webaudio nothing polls for the clip end. So a clip
     // whose end falls inside that window must silence the element there.
     const clipEndCtx = this._html5ClipEndContextTime();
-    const when = this._startSourceNode(this._crossoverComputedOffset, CROSSOVER_FADE_SEC);
+    // Not a fresh start: a crossfade this track is in carries on over Web Audio.
+    const when = this._startSourceNode(this._crossoverComputedOffset, CROSSOVER_FADE_SEC, false);
 
     if (when !== null && this._html5GainNode) {
       const now = this.ctx.currentTime;
@@ -870,7 +1104,7 @@ export class Track {
     );
   }
 
-  private _startSourceNode(offset: number, fadeInSec = 0): number | null {
+  private _startSourceNode(offset: number, fadeInSec = 0, freshStart = true): number | null {
     if (!this.ctx || !this.audioBuffer || !this.gainNode) return null;
     this._maybeComputeBufferAlignment();
     this._stopSourceNode();
@@ -896,14 +1130,16 @@ export class Track {
     const maxOffset = this._bufferClipLength;
     const effectiveOffset = Math.min(offset + lead * rate, maxOffset);
 
+    // A fresh start (play, seek, resume) ends any crossfade this track was in.
+    if (freshStart) this._resetFade();
     if (fadeInSec > 0) {
       const fadeNode = this.ctx.createGain();
       fadeNode.gain.setValueAtTime(0, when);
       fadeNode.gain.linearRampToValueAtTime(1, when + fadeInSec);
       this.sourceNode.connect(fadeNode);
-      fadeNode.connect(this.gainNode);
+      fadeNode.connect(this._sourceOutput);
     } else {
-      this.sourceNode.connect(this.gainNode);
+      this.sourceNode.connect(this._sourceOutput);
     }
     this.sourceNode.onended = this._handleWebAudioEnded;
 
@@ -971,11 +1207,14 @@ export class Track {
 
       const remaining = this.duration - this.currentTime;
       const snap = this._actor.getSnapshot();
-      if (
-        !snap.context.notifiedLookahead &&
-        !isNaN(remaining) &&
-        remaining <= GAPLESS_SCHEDULE_LOOKAHEAD
-      ) {
+      // Ask for the next transition this many wall-clock seconds before the
+      // end (the queue's scheduling horizon is in wall-clock seconds too), and
+      // a crossfade's length earlier still. `remaining` is in track time,
+      // which passes at the playback rate.
+      const lead =
+        (GAPLESS_SCHEDULE_LOOKAHEAD + (this.queueRef.crossfadeAfter?.(this) ?? 0)) *
+        this.queueRef.playbackRate;
+      if (!snap.context.notifiedLookahead && !isNaN(remaining) && remaining <= lead) {
         this._actor.send({ type: 'LOOKAHEAD_REACHED' });
         queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
       }
@@ -1002,7 +1241,31 @@ export class Track {
     if (this.clipEnd === null) return false;
     const snap = this._actor.getSnapshot();
     if (snap.value !== 'html5' || !snap.context.isPlaying) return false;
-    if (this.audio.currentTime < this.clipEnd) return false;
+    if (this.audio.currentTime < this.clipEnd) {
+      // Polling only notices the end afterwards (by up to a timeupdate,
+      // ~250 ms, in a background tab), so once it is near, silence the
+      // element exactly at clipEnd on the AudioContext clock. A seek, a
+      // fresh start or a rate change puts the gain back (cancelHtml5Mute).
+      const left = (this.clipEnd - this.audio.currentTime) / (this.audio.playbackRate || 1);
+      if (left < CLIP_END_ARM_SEC && this._html5GainNode && this.ctx) {
+        const now = this.ctx.currentTime;
+        const at = now + left;
+        const armed = this._clipEndMuteAt;
+        // Arm once; re-aim when the predicted end moves, as it does when the
+        // element stalls to buffer while the AudioContext clock runs on (a
+        // mute aimed at the old end would cut off the rest of the clip).
+        if (armed === null || Math.abs(at - armed) > CLIP_END_DRIFT_SEC) {
+          const gain = this._html5GainNode.gain;
+          if (armed !== null) {
+            gain.cancelScheduledValues(now);
+            gain.setValueAtTime(1, now);
+          }
+          this._clipEndMuteAt = at;
+          gain.setValueAtTime(0, at);
+        }
+      }
+      return false;
+    }
     this.queueRef.onDebug(
       `clip end reached on HTML5 track=${this.key} audioTime=${this.audio.currentTime.toFixed(3)} clipEnd=${this.clipEnd}`
     );
