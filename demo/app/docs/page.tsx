@@ -248,7 +248,7 @@ export function usePlayer(urls: string[]) {
                 [
                   'preloadNumTracks',
                   'number',
-                  'How many tracks to preload ahead. Default 2, 0 disables.',
+                  'How many tracks to preload ahead. Default 1, 0 disables.',
                 ],
                 [
                   'playbackMethod',
@@ -432,11 +432,12 @@ interface TrackMetadata {
 
           <Section id="preloading" title="Preloading">
             <p>
-              gapless.js preloads and decodes the next two tracks by default. Lower it to save
-              bandwidth and memory, raise it for flaky connections. You can change it at any time.
+              gapless.js preloads and decodes the next track by default, which is all gapless
+              playback needs. Each preloaded track holds its decoded audio, about 23 MB per minute,
+              so raise it only for flaky connections. You can change it at any time.
             </p>
             <CodeBlock>{`
-const player = new Queue({ tracks, preloadNumTracks: 1 });
+const player = new Queue({ tracks, preloadNumTracks: 2 });
 
 player.preloadNumTracks = 0; // Disable preloading
 player.preloadNumTracks = 3; // Preload 3 ahead

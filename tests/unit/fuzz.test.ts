@@ -478,7 +478,8 @@ async function runAsyncEditFuzz(seed: number, initialTracks: number, numOps: num
   trackCounter = 0;
   mockFetchSlow(seed);
   const rand = mulberry32(seed);
-  const queue = new Queue();
+  // Two ahead: more preloaded tracks means more gapless starts to edit around.
+  const queue = new Queue({ preloadNumTracks: 2 });
   queue.setEntries(Array.from({ length: initialTracks }, () => newEntry()));
   let scheduledSeen = 0;
   try {

@@ -56,7 +56,9 @@ export interface GaplessOptions {
   volume?: number;
   /**
    * Number of tracks to preload ahead of the current track.
-   * Defaults to 2. Set to 0 to disable preloading.
+   * Defaults to 1, the next track, which is all gapless playback needs; each
+   * preloaded track holds its decoded audio (about 23 MB a minute). Set to 0
+   * to disable preloading.
    */
   preloadNumTracks?: number;
   /**

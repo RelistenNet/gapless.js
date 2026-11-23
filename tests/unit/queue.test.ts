@@ -1118,7 +1118,10 @@ describe('Queue preloading', () => {
 
   it('preloads at most PRELOAD_AHEAD (2) tracks beyond current once past the speculative-load threshold', async () => {
     mockFetchSuccess();
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    const q = new Queue({
+      tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'],
+      preloadNumTracks: 2,
+    });
     injectBuffer(q, 0, 180);
     q.play();
     // Advance ctx time past the 15s threshold so further-ahead tracks (i > fromIndex+1)
@@ -1140,7 +1143,10 @@ describe('Queue preloading', () => {
 
   it('preloads next tracks after advancing via next()', async () => {
     mockFetchSuccess();
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    const q = new Queue({
+      tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'],
+      preloadNumTracks: 2,
+    });
     injectBuffer(q, 0, 180);
     q.play();
     advanceTime(20);
@@ -1158,7 +1164,10 @@ describe('Queue preloading', () => {
 
   it('previous() triggers preloading of tracks ahead of new position', async () => {
     mockFetchSuccess();
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'] });
+    const q = new Queue({
+      tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3', 'e.mp3'],
+      preloadNumTracks: 2,
+    });
     // Play and advance to track 3 (inject buffer so preload is not deferred)
     injectBuffer(q, 0, 180);
     q.play();
@@ -1367,7 +1376,7 @@ describe('Queue preloading without prior AudioContext', () => {
     vi.stubGlobal('AudioContext', MockAudioContext);
 
     mockFetchSuccess();
-    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'] });
+    const q = new Queue({ tracks: ['a.mp3', 'b.mp3', 'c.mp3', 'd.mp3'], preloadNumTracks: 2 });
     const tracks = (q as unknown as InternalQueue)._tracks;
 
     // gotoTrack() creates the AudioContext and triggers preloading (paused, so no deferral)
