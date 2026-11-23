@@ -240,7 +240,11 @@ player.setEntries([
 ]);
 ```
 
-The next entry starts `crossfade` seconds before the current one ends, and the two cross on equal-power curves, so the level stays even. The queue moves to the next entry when the current one finishes fading out. The fade is shortened to fit either entry and the time left, and becomes a gapless cut when under 0.1 s is left. Crossfades need both entries decoded: one from a track still playing over HTML5 is a gapless cut instead. Pausing or seeking mid-fade stops the incoming entry; on resume it starts over with a fade over the time left. Skipping to the next entry mid-fade starts it from its beginning.
+The next entry starts `crossfade` seconds before the current one ends, and the two cross on equal-power curves, so the level stays even. The queue moves to the next entry when the current one finishes fading out. The fade is shortened to fit either entry and the time left, and becomes a gapless cut when under 0.1 s is left.
+
+Crossfades don't wait for decoding. A short clip of a long file often isn't decoded by the time its fade starts, so either entry can fade while still streaming over HTML5: the outgoing one fades from its estimated end, and an incoming one not decoded yet starts streaming on a timer, silent until its fade begins. These are accurate to tens of milliseconds rather than to the sample, which you can't hear in a fade. If the decode finishes mid-fade, the entry moves to Web Audio without interrupting it. Fading a streaming entry needs it routed through the AudioContext, as `HYBRID` does when the server sends CORS headers; in `HTML5_ONLY` mode transitions are cuts.
+
+Pausing or seeking mid-fade stops the incoming entry; on resume it starts over with a fade over the time left. Skipping to the next entry mid-fade starts it from its beginning.
 
 ### `TrackMetadata`
 

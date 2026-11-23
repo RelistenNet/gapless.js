@@ -33,6 +33,8 @@ const MAX_SCHEDULE_LOOKAHEAD = 5;
 
 /** A crossfade shorter than this is played as a gapless cut instead. */
 const MIN_CROSSFADE_SEC = 0.1;
+/** How far a fade in progress tolerates its end time moving before it is redone. */
+const FADE_DRIFT_SEC = 0.25;
 /** How far ahead of now a crossfade can start, so both ramps are in the future. */
 const CROSSFADE_LEAD_SEC = 0.05;
 
@@ -121,7 +123,12 @@ export class Queue implements TrackQueueRef {
    * time and backend, and the fade asked for. A reschedule that would come
    * out the same keeps it (see _rescheduleGapless).
    */
-  private _scheduledFor: { endTime: number; type: PlaybackType; want: number } | null = null;
+  private _scheduledFor: {
+    endTime: number;
+    start: number;
+    type: PlaybackType;
+    want: number;
+  } | null = null;
 
   /** @internal Index of the scheduled track (debugging and tests). */
   get _scheduledNextIndex(): number | null {
@@ -222,6 +229,14 @@ export class Queue implements TrackQueueRef {
             cur.play();
           } else {
             this._scheduledNext = null;
+            this._scheduledFor = null;
+            // A crossfade start over HTML5 is now just the track playing on.
+            cur.takeOverScheduledStart();
+            // Ask for its own next transition now: a track that started early
+            // may have spent its lookahead notice while it was still incoming.
+            queueMicrotask(() => {
+              if (this._currentTrack === cur && this.isPlaying) this._tryScheduleGapless(cur);
+            });
             this.onDebug(
               `onTrackEnded: gapless track ${cur.key} — sourceNode=${cur.hasSourceNode} isPlaying=${cur.isPlaying} machineState=${cur.machineState}`
             );
@@ -1022,12 +1037,19 @@ export class Queue implements TrackQueueRef {
     const was = this._scheduledFor;
     if (current && next && was && next === this._scheduleTargetOf(current)) {
       const endTime = this._computeTrackEndTime(current);
-      if (
+      const sameFade = (next.crossfadeIn ?? this._crossfade) === was.want;
+      const unchanged =
         endTime !== null &&
         Math.abs(endTime - was.endTime) < 0.002 &&
-        current.playbackType === was.type &&
-        (next.crossfadeIn ?? this._crossfade) === was.want
-      ) {
+        current.playbackType === was.type;
+      // A fade under way survives the end time firming up (a streaming track
+      // crossing over to Web Audio, an HTML5 estimate drifting): restarting
+      // the incoming track would be far worse than a fade a little off. A
+      // seek moves the end time much further and still reschedules.
+      const ctx = getAudioContext();
+      const fading = !!ctx && was.want > 0 && was.start <= ctx.currentTime;
+      const close = endTime !== null && Math.abs(endTime - was.endTime) < FADE_DRIFT_SEC;
+      if (sameFade && (unchanged || (fading && close))) {
         this.onDebug(`_rescheduleGapless: ${next.key} unchanged, keeping its schedule`);
         return;
       }
@@ -1041,60 +1063,78 @@ export class Queue implements TrackQueueRef {
     if (!ctx || this.playbackMethod === 'HTML5_ONLY' || !current) return;
 
     const next = this._scheduleTargetOf(current);
-    if (!next) return;
+    if (!next || this._scheduledNext === next || !current.isPlaying) return;
 
-    if (
-      !current.isBufferLoaded ||
-      !next.isBufferLoaded ||
-      this._scheduledNext === next ||
-      !current.isPlaying
-    )
-      return;
+    // A crossfade doesn't need sample accuracy, so either side may still be
+    // streaming over HTML5 (see _crossfadeWindow). A gapless start does:
+    // both tracks must be decoded.
+    const want = next.crossfadeIn ?? this._crossfade;
+    const mayFade = want > 0 && this._canFadeOut(current);
+    if (!mayFade && (!current.isBufferLoaded || !next.isBufferLoaded)) return;
 
     const endTime = this._computeTrackEndTime(current);
     if (endTime === null) return;
 
     if (endTime < ctx.currentTime + 0.01) return;
 
+    // Wait until the transition is near when either side is on HTML5: an
+    // HTML5 end time is a prediction that drifts, and an incoming track not
+    // decoded yet would start streaming from a long timer (and compete with
+    // its own decode, which may well finish meanwhile and do better).
     const timeUntilEnd = endTime - ctx.currentTime;
-    if (current.playbackType === 'HTML5' && timeUntilEnd > MAX_SCHEDULE_LOOKAHEAD) {
+    const horizon = MAX_SCHEDULE_LOOKAHEAD + (mayFade ? want : 0);
+    const nearOnly = current.playbackType === 'HTML5' || !next.isBufferLoaded;
+    if (nearOnly && timeUntilEnd > horizon) {
       this.onDebug(
-        `_tryScheduleGapless: deferring — HTML5 track ${current.key} has ${timeUntilEnd.toFixed(1)}s remaining (max lookahead=${MAX_SCHEDULE_LOOKAHEAD}s)`
+        `_tryScheduleGapless: deferring — HTML5 track ${current.key} has ${timeUntilEnd.toFixed(1)}s remaining (max lookahead=${horizon}s)`
       );
       return;
     }
 
-    const { start, fade } = this._crossfadeWindow(current, next, endTime, ctx.currentTime);
-    if (!next.scheduleGaplessStart(start, fade)) {
+    const win = mayFade
+      ? this._crossfadeWindow(current, next, endTime, ctx.currentTime)
+      : { start: endTime, fade: 0 };
+    const { start, fade } = win;
+    if (fade === 0 && (!current.isBufferLoaded || !next.isBufferLoaded)) return;
+
+    // Decoded: start sample-accurately on the AudioContext clock. Not yet
+    // (only when fading): stream it in over HTML5 from a timer.
+    const how = next.isBufferLoaded ? 'webaudio' : 'html5';
+    const ok =
+      how === 'webaudio'
+        ? next.scheduleGaplessStart(start, fade)
+        : next.scheduleHtml5Start(start, fade);
+    if (!ok) {
       this.onDebug(
-        `_tryScheduleGapless: track ${next.key} rejected SCHEDULE_GAPLESS (state=${next.machineState})`
+        `_tryScheduleGapless: track ${next.key} rejected a ${how} start (state=${next.machineState})`
       );
       return;
     }
-    // When scheduling from an HTML5-clock prediction, mute the HTML5 gain
-    // at endTime so a stalled/late HTML5 element is silenced rather than
-    // overlapping the next track.
-    if (current.playbackType === 'HTML5') {
+    if (fade > 0) {
+      current.scheduleFadeOut(start, fade);
+    } else if (current.playbackType === 'HTML5') {
+      // Scheduling from an HTML5-clock prediction: mute the HTML5 gain at
+      // endTime so a stalled/late element is silenced rather than
+      // overlapping the next track.
       current.scheduleHtml5Mute(endTime);
     }
-    if (fade > 0) current.scheduleFadeOut(start, fade);
     this.onDebug(
-      `_tryScheduleGapless: scheduled track ${next.key} at ${start.toFixed(3)} endTime=${endTime.toFixed(3)} (in ${(start - ctx.currentTime).toFixed(1)}s) crossfade=${fade.toFixed(2)}s curPlaybackType=${current.playbackType}`
+      `_tryScheduleGapless: scheduled track ${next.key} (${how}) at ${start.toFixed(3)} endTime=${endTime.toFixed(3)} (in ${(start - ctx.currentTime).toFixed(1)}s) crossfade=${fade.toFixed(2)}s curPlaybackType=${current.playbackType}`
     );
     this._scheduledNext = next;
-    this._scheduledFor = {
-      endTime,
-      type: current.playbackType,
-      want: next.crossfadeIn ?? this._crossfade,
-    };
+    this._scheduledFor = { endTime, start, type: current.playbackType, want };
+  }
+
+  /** Whether `track` can fade out: on Web Audio, or streaming through the AudioContext. */
+  private _canFadeOut(track: Track): boolean {
+    return track.playbackType === 'WEBAUDIO' || track.canFadeHtml5;
   }
 
   /**
    * When `next` starts and how long it fades in, for a transition ending at
-   * `endTime`. Gapless (start = endTime, fade 0) unless a crossfade applies:
-   * next's own `crossfade`, else the queue default. The fade is cut to fit
-   * both tracks and the time left, and dropped if too little is left.
-   * Only a current track on Web Audio fades: an HTML5 end time is a guess.
+   * `endTime`: `fade` seconds early, cut to fit both tracks (where their
+   * length is known) and the time left, and dropped (a gapless start at
+   * endTime) when too little is left.
    */
   private _crossfadeWindow(
     current: Track,
@@ -1104,9 +1144,10 @@ export class Queue implements TrackQueueRef {
   ): { start: number; fade: number } {
     const gapless = { start: endTime, fade: 0 };
     const want = next.crossfadeIn ?? this._crossfade;
-    if (want <= 0 || current.playbackType !== 'WEBAUDIO') return gapless;
+    if (want <= 0 || !this._canFadeOut(current)) return gapless;
     const rate = this._playbackRate;
-    const fit = Math.min(want, current.duration / rate, next.duration / rate);
+    const lengths = [current.duration, next.duration].filter((d) => isFinite(d));
+    const fit = Math.min(want, ...lengths.map((d) => d / rate));
     const start = Math.max(endTime - fit, now + CROSSFADE_LEAD_SEC);
     const fade = endTime - start;
     return fade >= MIN_CROSSFADE_SEC ? { start, fade } : gapless;
@@ -1114,7 +1155,7 @@ export class Queue implements TrackQueueRef {
 
   private _computeTrackEndTime(track: Track): number | null {
     const ctx = getAudioContext();
-    if (!ctx || !track.isBufferLoaded) return null;
+    if (!ctx) return null;
 
     // Web Audio playback: derive the end time from the source node's live
     // playback anchor. For an uninterrupted gapless chain this equals

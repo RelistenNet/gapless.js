@@ -7,7 +7,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { Queue } from '../../src/Queue';
 import type { Track } from '../../src/Track';
 import type { Entry, GaplessOptions } from '../../src/types';
-import { advanceTime, mockFetchSuccess, type MockAudioBufferSourceNode } from '../setup';
+import {
+  advanceTime,
+  mockFetchSuccess,
+  MockAudioElement,
+  type MockAudioBufferSourceNode,
+} from '../setup';
 
 const flush = async (n = 15) => {
   for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
@@ -112,15 +117,18 @@ describe('crossfade selection', () => {
     expect(none.b.scheduledStartContextTime).toBeCloseTo(none.a.playbackEndContextTime!, 5);
   });
 
-  it('does not fade out of a track still on HTML5', async () => {
+  it('fades out of a track still on HTML5, but not in HTML5_ONLY mode', async () => {
     mockFetchSuccess();
     const q = new Queue({ crossfade: 4 });
     q.setEntries(AB);
     const [a, b] = (q as any)._tracks as Track[];
-    b.audioBuffer = { duration: 180 } as AudioBuffer;
-    const win = (q as any)._crossfadeWindow(a, b, 100, 90);
     expect(a.playbackType).toBe('HTML5');
-    expect(win).toEqual({ start: 100, fade: 0 });
+    expect((q as any)._crossfadeWindow(a, b, 100, 90)).toEqual({ start: 96, fade: 4 });
+
+    const html5Only = new Queue({ crossfade: 4, playbackMethod: 'HTML5_ONLY' });
+    html5Only.setEntries(AB);
+    const [c, d] = (html5Only as any)._tracks as Track[];
+    expect((html5Only as any)._crossfadeWindow(c, d, 100, 90)).toEqual({ start: 100, fade: 0 });
   });
 
   it('setCrossfade reschedules a pending transition', async () => {
@@ -232,7 +240,7 @@ describe('scheduling lead for long fades', () => {
   it('a fade longer than the 5 s lookahead is scheduled in time, at full length', async () => {
     // Regression: with the next track already decoded when the current one
     // started, nothing scheduled it until 5 s before the end, so every fade
-    // was cut to about 5 s.
+    // was cut to about 5 s. (The lookahead now also leads by the fade.)
     mockFetchSuccess();
     const q = new Queue({ crossfade: 8, preloadNumTracks: 2 });
     q.setEntries([{ key: 'x', url: 'x.mp3' }, ...AB]);
@@ -248,11 +256,196 @@ describe('scheduling lead for long fades', () => {
     expect(q.currentTrack?.key).toBe('a');
     expect(a.playbackType).toBe('WEBAUDIO');
     expect(b.isBufferLoaded).toBe(true);
-    expect(b.scheduledStartContextTime).toBeNull();
+    // Scheduled at the handoff, with the full fade (not cut to the 5 s lookahead).
+    expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime! - 8, 5);
+  });
+});
 
-    advanceTime(a.playbackEndContextTime! - 12 - (a as any).ctx.currentTime); // 12 s left
+// ---------------------------------------------------------------------------
+// Crossfades with a track still streaming over HTML5 (not decoded yet): the
+// common case for a short clip of a long file.
+// ---------------------------------------------------------------------------
+
+/** Fetch that never answers for URLs containing any of `hang`: those stay undecoded. */
+function fetchHanging(...hang: string[]) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD') return Promise.resolve({ ok: true, redirected: false, url: '' });
+      if (hang.some((h) => String(url).includes(h))) return new Promise(() => {});
+      return Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) });
+    })
+  );
+}
+
+const el = (t: Track) => t.audio as unknown as MockAudioElement;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Put a track playing over HTML5 `left` seconds before the end of a 180 s file. */
+function nearEndOnHtml5(t: Track, left: number) {
+  el(t).simulateLoadedMetadata(180);
+  el(t).currentTime = 180 - left;
+}
+
+describe('crossfades over HTML5', () => {
+  it('streaming → decoded: the outgoing element fades on its fade node', async () => {
+    fetchHanging('a.mp3');
+    const q = new Queue({ crossfade: 4 });
+    q.setEntries(AB);
+    q.play();
     await flush();
-    const end = a.playbackEndContextTime!;
-    expect(b.scheduledStartContextTime).toBeCloseTo(end - 8, 5);
+    const [a, b] = (q as any)._tracks as Track[];
+    b.preload();
+    await flush();
+    expect(a.playbackType).toBe('HTML5');
+    expect(b.isBufferLoaded).toBe(true);
+
+    // The element plays through the fade node, so it can be faded.
+    expect((a as any)._html5GainNode.connect).toHaveBeenCalledWith((a as any)._fadeGainNode);
+    nearEndOnHtml5(a, 8);
+    q.onTrackBufferReady(a); // what the lookahead does
+    await flush(2);
+    const end = (a as any).ctx.currentTime + 8;
+    expect(b.scheduledStartContextTime).toBeCloseTo(end - 4, 5);
+    expect(lastCurve(b)![2]).toBeCloseTo(4, 5);
+    const [out, at, dur] = lastCurve(a)!;
+    expect(out[0]).toBeCloseTo(1, 5);
+    expect([at, dur]).toEqual([expect.closeTo(end - 4, 5), expect.closeTo(4, 5)]);
+  });
+
+  it('decoded → streaming: the incoming track starts over HTML5 on a timer, fading in', async () => {
+    fetchHanging('b.mp3');
+    const { q, a, b } = await playingUndecodedNext();
+    // 4.05 s left: the fade starts 50 ms from now.
+    advanceTime(a.playbackEndContextTime! - 4.05 - (a as any).ctx.currentTime);
+    q.onTrackBufferReady(a);
+    await flush(2);
+    expect(b.hasScheduledStart).toBe(true);
+    expect(b.isPlaying).toBe(false);
+    const [inCurve, at, dur] = lastCurve(b)!;
+    expect(inCurve[0]).toBe(0);
+    expect(dur).toBeCloseTo(4, 1);
+
+    await sleep(80);
+    expect(b.machineState).toBe('html5');
+    expect(b.isPlaying).toBe(true);
+    expect(el(b).play).toHaveBeenCalledTimes(1);
+    // play() reset the fade for a fresh start; the fade-in was put back.
+    expect(lastCurve(b)![1]).toBe(at);
+    expect(lastCurve(a)![1]).toBeCloseTo(at, 5);
+  });
+
+  it('at the handoff the streaming track plays on, not restarted', async () => {
+    fetchHanging('b.mp3');
+    const { q, a, b } = await playingUndecodedNext();
+    advanceTime(a.playbackEndContextTime! - 4.05 - (a as any).ctx.currentTime);
+    q.onTrackBufferReady(a);
+    await flush(2);
+    await sleep(80);
+    advanceTime(4.05);
+    sourcesOf(a).at(-1)!.simulateEnded();
+    await flush(2);
+    expect(q.currentTrack?.key).toBe('b');
+    expect(b.isPlaying).toBe(true);
+    expect(el(b).play).toHaveBeenCalledTimes(1);
+    expect(b.hasScheduledStart).toBe(false);
+  });
+
+  it('if the outgoing track ends before the timer, the incoming one starts at once', async () => {
+    fetchHanging('b.mp3');
+    const { q, a, b } = await playingUndecodedNext();
+    advanceTime(a.playbackEndContextTime! - 8 - (a as any).ctx.currentTime); // fade due in 4 s
+    q.onTrackBufferReady(a);
+    await flush(2);
+    expect(b.hasScheduledStart).toBe(true);
+    expect(b.isPlaying).toBe(false);
+    sourcesOf(a).at(-1)!.simulateEnded(); // well before the fade was due
+    await flush(2);
+    expect(q.currentTrack?.key).toBe('b');
+    expect(b.isPlaying).toBe(true);
+    expect(fadeGain(b).setValueAtTime.mock.calls.at(-1)![0]).toBe(1);
+  });
+
+  it('pause mid-fade stops the streaming incoming track', async () => {
+    fetchHanging('b.mp3');
+    const { q, a, b } = await playingUndecodedNext();
+    advanceTime(a.playbackEndContextTime! - 4.05 - (a as any).ctx.currentTime);
+    q.onTrackBufferReady(a);
+    await flush(2);
+    await sleep(80);
+    expect(b.isPlaying).toBe(true);
+    q.pause();
+    expect(b.isPlaying).toBe(false);
+    expect(el(b).paused).toBe(true);
+    expect(b.hasScheduledStart).toBe(false);
+  });
+
+  it('the incoming decode finishing mid-fade keeps the fade and the schedule', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'HEAD') return { ok: true, redirected: false, url: '' };
+        if (String(url).includes('b.mp3')) await gate;
+        return { ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) };
+      })
+    );
+    const { q, a, b } = await playingUndecodedNext();
+    advanceTime(a.playbackEndContextTime! - 4.05 - (a as any).ctx.currentTime);
+    q.onTrackBufferReady(a);
+    await flush(2);
+    await sleep(80);
+    expect(b.machineState).toBe('html5');
+    const resets = fadeGain(b).setValueAtTime.mock.calls.length;
+    const playCalls = el(b).play.mock.calls.length;
+
+    release();
+    await flush();
+    expect(b.playbackType).toBe('WEBAUDIO'); // crossed over mid-fade
+    expect(fadeGain(b).setValueAtTime.mock.calls.length).toBe(resets); // fade not reset
+    expect(b.isPlaying).toBe(true);
+    expect(el(b).play.mock.calls.length).toBe(playCalls);
+    expect(b.hasScheduledStart).toBe(true);
+  });
+});
+
+/** a decoded and playing on Web Audio; b (the next) still loading. */
+async function playingUndecodedNext() {
+  const q = new Queue({ crossfade: 4 });
+  q.setEntries(AB);
+  q.play();
+  await flush();
+  const [a, b] = (q as any)._tracks as Track[];
+  expect(a.playbackType).toBe('WEBAUDIO');
+  expect(b.isBufferLoaded).toBe(false);
+  return { q, a, b };
+}
+
+describe('the transition after a crossfade', () => {
+  it('is scheduled at the handoff, even if the track used up its lookahead while fading in', async () => {
+    // Regression: a track that started early (fading in) can spend its one
+    // lookahead notice while still incoming, when the queue ignores it. After
+    // the handoff nothing asked for its next transition, so it ended in a cut.
+    mockFetchSuccess();
+    const q = new Queue({ crossfade: 4, preloadNumTracks: 2 });
+    q.setEntries([...AB, { key: 'c', url: 'c.mp3' }]);
+    q.play();
+    await flush();
+    const [a, b, c] = (q as any)._tracks as Track[];
+    b.preload();
+    c.preload();
+    await flush();
+    expect(c.isBufferLoaded).toBe(true);
+    // b fades in over a's last 4 s, then a ends.
+    advanceTime(a.playbackEndContextTime! - 8 - (a as any).ctx.currentTime);
+    q.onTrackBufferReady(a);
+    await flush(2);
+    (b as any)._actor.send({ type: 'LOOKAHEAD_REACHED' }); // spent while incoming
+    advanceTime(8);
+    sourcesOf(a).at(-1)!.simulateEnded();
+    await flush(2);
+    expect(q.currentTrack?.key).toBe('b');
+    expect(c.hasScheduledStart).toBe(true);
   });
 });

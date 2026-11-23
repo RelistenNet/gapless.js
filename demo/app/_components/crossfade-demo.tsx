@@ -58,13 +58,10 @@ export function CrossfadeDemo() {
 
   // During a fade both lanes play, but the queue's current track is still
   // the outgoing one until it ends: label the pair. Only a real fade: the
-  // incoming track is playing ahead of its turn (Web Audio, not yet current).
+  // incoming track is playing ahead of its turn (decoded or streaming).
   // Without one (a track not decoded in time) the transition is a cut.
   const fading =
-    playing &&
-    tracks[idx + 1]?.machineState === 'webaudio' &&
-    position >= (idx + 1) * step &&
-    fade > 0;
+    playing && !!tracks[idx + 1]?.isPlaying && position >= (idx + 1) * step && fade > 0;
   const fadeStage = (i: number): { tone: Tone; label: string } | null => {
     if (!fading) return null;
     if (i === idx + 1) return { tone: 'good', label: 'Fading in' };
@@ -175,7 +172,11 @@ export function CrossfadeDemo() {
             : `Each song starts ${fade} seconds before the last one ends, and the two cross on equal-power curves so the level stays even.`}
         </p>
         <p className="font-mono text-sm/6 text-zinc-600 tabular-nums dark:text-zinc-400">
-          {formatTime(position)} / {formatTime(total)}
+          {/* The current song's own time: the lanes assume each fade happened,
+              so a combined time would run backwards after a cut. */}
+          {player.state === 'idle' || player.state === 'ended'
+            ? `${formatTime(0)} / ${formatTime(JAM_SECONDS)}`
+            : `${JAMS[idx].title} ${formatTime(current?.currentTime)} / ${formatTime(JAM_SECONDS)}`}
         </p>
       </div>
     </div>
