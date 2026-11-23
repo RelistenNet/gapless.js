@@ -102,7 +102,8 @@ describe('crossfade selection', () => {
 
   it('is cut to fit a next entry shorter than the fade', async () => {
     const { a, b } = await playing([AB[0], { ...AB[1], start: 10, end: 11.5 }], { crossfade: 4 });
-    expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime! - 1.5, 5);
+    // At most half the incoming clip overlaps, so it plays on after the handoff.
+    expect(b.scheduledStartContextTime).toBeCloseTo(a.playbackEndContextTime! - 0.75, 5);
   });
 
   it('is shortened to the time left, and dropped when too little is left', async () => {
@@ -447,5 +448,75 @@ describe('the transition after a crossfade', () => {
     await flush(2);
     expect(q.currentTrack?.key).toBe('b');
     expect(c.hasScheduledStart).toBe(true);
+  });
+});
+
+describe('codex review: edge cases', () => {
+  it('removing the incoming entry cancels the outgoing fade', async () => {
+    const { q, a } = await playing(AB, { crossfade: 4 });
+    expect(lastCurve(a)).not.toBeNull();
+    const resets = fadeGain(a).cancelScheduledValues.mock.calls.length;
+    q.removeTrack(1);
+    expect(fadeGain(a).cancelScheduledValues.mock.calls.length).toBeGreaterThan(resets);
+    expect(fadeGain(a).setValueAtTime.mock.calls.at(-1)![0]).toBe(1);
+    expect((q as any)._scheduledNext).toBeNull();
+  });
+
+  it('an incoming clip keeps playing time after the handoff', async () => {
+    const { a, b } = await playing([AB[0], { ...AB[1], start: 10, end: 11.5 }], { crossfade: 4 });
+    const fade = a.playbackEndContextTime! - b.scheduledStartContextTime!;
+    expect(fade).toBeLessThanOrEqual(0.75 + 1e-9);
+  });
+
+  it('an incoming entry that already ended by the handoff ends the queue, not hangs it', async () => {
+    const onEnded = vi.fn();
+    const { q, a, b } = await playing([AB[0], { ...AB[1], start: 10, end: 11.5 }], {
+      crossfade: 4,
+      onEnded,
+    });
+    advanceTime(10);
+    sourcesOf(b).at(-1)!.simulateEnded(); // the incoming one reports first
+    sourcesOf(a).at(-1)!.simulateEnded();
+    await flush(4);
+    expect(onEnded).toHaveBeenCalled();
+    expect(q.isPlaying).toBe(false);
+  });
+
+  it('a seek to the same spot mid-fade keeps the outgoing fade', async () => {
+    const { q, a } = await playing(AB, { crossfade: 4 });
+    advanceTime(7); // 1 s into the fade
+    const curves = fadeGain(a).setValueCurveAtTime.mock.calls.length;
+    q.seek(a.currentTime);
+    await flush(2);
+    // The seek restarted a's source (resetting its fade): the fade-out is redone.
+    expect(fadeGain(a).setValueCurveAtTime.mock.calls.length).toBeGreaterThan(curves);
+  });
+
+  it('at a slow playback rate a streaming crossfade is still scheduled', async () => {
+    fetchHanging('b.mp3');
+    const { q, a, b } = await playingUndecodedNext();
+    q.setPlaybackRate(0.5);
+    await flush(2);
+    const ctxNow = () => (a as any).ctx.currentTime;
+    advanceTime(a.playbackEndContextTime! - 13 - ctxNow()); // 13 wall s left
+    await flush();
+    advanceTime(5); // 8 wall s left: inside 5 + 4
+    await flush();
+    expect(b.hasScheduledStart).toBe(true);
+  });
+
+  it('setCrossfade schedules a transition when none was', async () => {
+    fetchHanging('b.mp3');
+    const q = new Queue();
+    q.setEntries(AB);
+    q.play();
+    await flush();
+    const [a, b] = (q as any)._tracks as Track[];
+    advanceTime(a.playbackEndContextTime! - 4.5 - (a as any).ctx.currentTime);
+    await flush(); // lookahead spent: nothing to do without a fade, b not decoded
+    expect(b.hasScheduledStart).toBe(false);
+    q.setCrossfade(4);
+    await flush(2);
+    expect(b.hasScheduledStart).toBe(true);
   });
 });

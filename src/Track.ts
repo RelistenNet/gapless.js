@@ -1146,11 +1146,13 @@ export class Track {
 
       const remaining = this.duration - this.currentTime;
       const snap = this._actor.getSnapshot();
-      // A crossfade starts `fade` seconds before the end, so ask for the
-      // transition that much earlier (in track time, hence the rate).
+      // Ask for the next transition this many wall-clock seconds before the
+      // end (the queue's scheduling horizon is in wall-clock seconds too), and
+      // a crossfade's length earlier still. `remaining` is in track time,
+      // which passes at the playback rate.
       const lead =
-        GAPLESS_SCHEDULE_LOOKAHEAD +
-        (this.queueRef.crossfadeAfter?.(this) ?? 0) * this.queueRef.playbackRate;
+        (GAPLESS_SCHEDULE_LOOKAHEAD + (this.queueRef.crossfadeAfter?.(this) ?? 0)) *
+        this.queueRef.playbackRate;
       if (!snap.context.notifiedLookahead && !isNaN(remaining) && remaining <= lead) {
         this._actor.send({ type: 'LOOKAHEAD_REACHED' });
         queueMicrotask(() => this.queueRef.onTrackBufferReady(this));
