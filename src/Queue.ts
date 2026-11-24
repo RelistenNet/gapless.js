@@ -31,6 +31,8 @@ import type {
 
 const MAX_SCHEDULE_LOOKAHEAD = 5;
 
+/** How fast the output fades when the page is going away (see _onPageHide). */
+const UNLOAD_FADE_SEC = 0.025;
 /** The longest delay setTimeout supports. */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 /** Leeway past the scheduling horizon, so a lookahead notice right at it isn't refused. */
@@ -141,6 +143,22 @@ export class Queue implements TrackQueueRef {
 
   /** The scheduled track, if it reported its end before it became current. */
   private _scheduledEndedEarly: Track | null = null;
+  /**
+   * Closing the tab destroys the AudioContext mid-waveform, which clicks. A
+   * page can't delay its unload, so this is best effort: ramp every track to
+   * silence over a few milliseconds, which helps whenever the browser renders
+   * a little longer while it tears the page down.
+   */
+  private _onPageHide = (): void => {
+    for (const t of this._tracks) t.fadeOutForUnload(UNLOAD_FADE_SEC);
+  };
+
+  /** pagehide also fires for the back/forward cache: a restored page gets its volume back. */
+  private _onPageShow = (e: Event): void => {
+    if (!(e as PageTransitionEvent).persisted) return;
+    for (const t of this._tracks) t.setVolume(this._volume);
+  };
+
   /** Retries a transition deferred until it is near (see _tryScheduleGapless). */
   private _retryTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -193,6 +211,11 @@ export class Queue implements TrackQueueRef {
     this._onError = onError;
     this._onPlayBlocked = onPlayBlocked;
     this._onDebug = onDebug;
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', this._onPageHide);
+      window.addEventListener('pageshow', this._onPageShow);
+    }
 
     this._tracks = tracks.map(
       (url, i) =>
@@ -684,6 +707,10 @@ export class Queue implements TrackQueueRef {
   }
 
   destroy(): void {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('pagehide', this._onPageHide);
+      window.removeEventListener('pageshow', this._onPageShow);
+    }
     if (this._retryTimer !== null) clearTimeout(this._retryTimer);
     this._retryTimer = null;
     this._stopMediaSessionAnchor();

@@ -485,8 +485,27 @@ export class Track {
     } else {
       this.audio.volume = vol;
     }
-    if (this.gainNode) this.gainNode.gain.value = vol;
+    if (this.gainNode) {
+      // Drop a pending fade (fadeOutForUnload) so the new level holds.
+      this.gainNode.gain.cancelScheduledValues(0);
+      this.gainNode.gain.value = vol;
+    }
     this._actor.send({ type: 'SET_VOLUME', volume: vol });
+  }
+
+  /**
+   * Ramp this track's output to silence over `seconds`, from wherever it is:
+   * the page is going away. When the browser then destroys the AudioContext
+   * the output is already near zero, instead of being cut mid-waveform (a
+   * click). Undone by setVolume().
+   */
+  fadeOutForUnload(seconds: number): void {
+    const gain = this.gainNode?.gain;
+    if (!gain || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(0, now + seconds);
   }
 
   setPlaybackRate(rate: number): void {
